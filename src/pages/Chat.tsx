@@ -6,6 +6,7 @@ import { useChatSession } from "../hooks/useChatSession";
 import { supabase, type Message } from "../lib/supabase";
 import { getAIReply } from "../lib/groq";
 import { sendEmail } from "../lib/email";
+import { sfxSend, sfxPop } from "../lib/sound";
 import { cn } from "../lib/utils";
 
 function DateDivider({ date }: { date: string }) {
@@ -86,7 +87,12 @@ export function Chat() {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "messages", filter: `chat_user_id=eq.${credentials.dbId}` },
         (payload) => {
-          setMessages((prev) => (prev.some((m) => m.id === payload.new.id) ? prev : [...prev, payload.new as Message]));
+          const incoming = payload.new as Message;
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === incoming.id)) return prev;
+            if (incoming.sender_type !== "user") sfxPop();
+            return [...prev, incoming];
+          });
         }
       )
       .subscribe();
@@ -104,6 +110,7 @@ export function Chat() {
     const text = input.trim();
     setInput("");
     setSending(true);
+    sfxSend();
     try {
       const { data: userMsg } = await supabase
         .from("messages")

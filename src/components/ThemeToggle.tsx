@@ -2,11 +2,19 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
+import { sfxToggle } from "../lib/sound";
 
 export function ThemeToggle({ className }: { className?: string }) {
   const { theme, toggle } = useTheme();
   return (
-    <button onClick={toggle} className={cn("icon-btn overflow-hidden", className)} aria-label="Toggle theme">
+    <button
+      onClick={() => {
+        sfxToggle();
+        toggle();
+      }}
+      className={cn("icon-btn overflow-hidden", className)}
+      aria-label="Toggle theme"
+    >
       <AnimatePresence mode="wait" initial={false}>
         <motion.span
           key={theme}

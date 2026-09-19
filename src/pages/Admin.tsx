@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Lock, Image, Trash2, Plus, LogOut, Wifi, WifiOff, Music, Clapperboard,
-  Search, Star, MessageSquare, Send, ArrowLeft, Mail, Bell,
+  Lock, Image as ImageIcon, Trash2, Plus, LogOut, Wifi, WifiOff, Music, Clapperboard,
+  Search, Star, MessageSquare, Send, ArrowLeft, Mail, Bell, UserCircle2, Upload, Check,
 } from "lucide-react";
-import { supabase, type Message, type PortfolioAsset, type FavoriteMovie, type ChatUser } from "../lib/supabase";
+import { supabase, type Message, type PortfolioAsset, type FavoriteMovie, type ChatUser, type SiteProfile } from "../lib/supabase";
 import type { PlaylistTrack } from "../lib/musicStore";
 import { searchMovies, posterUrl, type Movie } from "../lib/tmdb";
 import { searchTracks, upsizeArtwork, type ItunesTrack } from "../lib/itunes";
 import { sendEmail, isEmail } from "../lib/email";
+import { uploadToPortfolioBucket } from "../lib/storage";
+import { sfxToggle } from "../lib/sound";
+import { cn } from "../lib/utils";
 
 const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || "";
 
@@ -24,12 +27,26 @@ type Conversation = {
   unreadCount: number;
 };
 
+const DEFAULT_PROFILE: SiteProfile = {
+  online: { name: "Vansh", bio: "Online.", avatar_url: null },
+  real: { name: "Vansh Kumar", bio: "Meerut · Class 11 · Computer Science", avatar_url: null },
+};
+
+const TABS = [
+  { id: "chats" as const, label: "Chats", icon: MessageSquare },
+  { id: "profile" as const, label: "Profile", icon: UserCircle2 },
+  { id: "assets" as const, label: "Content", icon: ImageIcon },
+  { id: "playlist" as const, label: "Playlist", icon: Music },
+  { id: "movies" as const, label: "Movies", icon: Clapperboard },
+  { id: "status" as const, label: "Status", icon: Wifi },
+];
+
 export function Admin() {
   const [hostnameOk, setHostnameOk] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [tab, setTab] = useState<"chats" | "assets" | "playlist" | "movies" | "status">("chats");
+  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("chats");
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [chatUsers, setChatUsers] = useState<ChatUser[]>([]);
@@ -48,7 +65,16 @@ export function Admin() {
   });
   const [notifSaved, setNotifSaved] = useState(false);
 
+  const [profile, setProfileState] = useState<SiteProfile>(DEFAULT_PROFILE);
+  const [profileSaved, setProfileSaved] = useState(false);
+  const [uploadingOnline, setUploadingOnline] = useState(false);
+  const [uploadingReal, setUploadingReal] = useState(false);
+  const onlineFileRef = useRef<HTMLInputElement>(null);
+  const realFileRef = useRef<HTMLInputElement>(null);
+
   const [newAsset, setNewAsset] = useState({ type: "photo", title: "", url: "", image_url: "", description: "" });
+  const [uploadingAsset, setUploadingAsset] = useState(false);
+  const assetFileRef = useRef<HTMLInputElement>(null);
 
   const [movieQuery, setMovieQuery] = useState("");
   const [movieResults, setMovieResults] = useState<Movie[]>([]);
@@ -96,9 +122,43 @@ export function Admin() {
         notify_user_on_reply: notifRow.value.notify_user_on_reply !== false,
       });
     }
+    const { data: profileRow } = await supabase.from("admin_settings").select("value").eq("key", "profile").single();
+    if (profileRow?.value?.online && profileRow?.value?.real) setProfileState(profileRow.value as SiteProfile);
   };
 
+  // Realtime: keep every tab live without needing a manual refresh.
+  useEffect(() => {
+    if (!authed) return;
+    const channel = supabase
+      .channel("admin-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => {
+        supabase.from("messages").select("*").order("created_at", { ascending: true }).limit(1000)
+          .then(({ data }) => data && setMessages(data));
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "chat_users" }, () => {
+        supabase.from("chat_users").select("*").order("last_seen", { ascending: false })
+          .then(({ data }) => data && setChatUsers(data as ChatUser[]));
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "portfolio_assets" }, () => {
+        supabase.from("portfolio_assets").select("*").order("sort_order")
+          .then(({ data }) => data && setAssets(data));
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "playlist" }, () => {
+        supabase.from("playlist").select("*").order("sort_order")
+          .then(({ data }) => data && setPlaylist(data as PlaylistTrack[]));
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "favorite_movies" }, () => {
+        supabase.from("favorite_movies").select("*").order("sort_order")
+          .then(({ data }) => data && setFavMovies(data as FavoriteMovie[]));
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [authed]);
+
   const toggleOnline = async () => {
+    sfxToggle();
     const next = !isOnline;
     await supabase.from("admin_settings").upsert({
       key: "online_status",
@@ -118,6 +178,35 @@ export function Admin() {
     setTimeout(() => setNotifSaved(false), 1800);
   };
 
+  const saveProfile = async (next: SiteProfile) => {
+    setProfileState(next);
+    await supabase.from("admin_settings").upsert({
+      key: "profile",
+      value: next,
+      updated_at: new Date().toISOString(),
+    });
+    setProfileSaved(true);
+    setTimeout(() => setProfileSaved(false), 1800);
+  };
+
+  const updateIdentity = (side: "online" | "real", patch: Partial<SiteProfile["online"]>) => {
+    setProfileState((p) => ({ ...p, [side]: { ...p[side], ...patch } }));
+  };
+
+  const uploadAvatar = async (side: "online" | "real", file: File) => {
+    const setUploading = side === "online" ? setUploadingOnline : setUploadingReal;
+    setUploading(true);
+    try {
+      const url = await uploadToPortfolioBucket(file, `avatars/${side}`);
+      const next = { ...profile, [side]: { ...profile[side], avatar_url: url } };
+      await saveProfile(next);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Upload failed — check the 'portfolio' storage bucket exists (migration 004).");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const addAsset = async () => {
     if (!newAsset.title) return;
     const { data } = await supabase.from("portfolio_assets").insert({
@@ -130,6 +219,18 @@ export function Admin() {
     if (data) {
       setAssets((p) => [...p, data]);
       setNewAsset({ type: "photo", title: "", url: "", image_url: "", description: "" });
+    }
+  };
+
+  const uploadAssetImage = async (file: File) => {
+    setUploadingAsset(true);
+    try {
+      const url = await uploadToPortfolioBucket(file, "gallery");
+      setNewAsset((p) => ({ ...p, image_url: url }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Upload failed — check the 'portfolio' storage bucket exists (migration 004).");
+    } finally {
+      setUploadingAsset(false);
     }
   };
 
@@ -265,19 +366,31 @@ export function Admin() {
   };
 
   if (!hostnameOk) {
-    return <div className="min-h-dvh grid place-items-center bg-black text-white"><div><h1 className="text-2xl font-black">404</h1></div></div>;
+    return (
+      <div className="min-h-dvh grid place-items-center" style={{ background: "var(--bg)", color: "var(--ink)" }}>
+        <h1 className="text-2xl font-extrabold tracking-tight">404</h1>
+      </div>
+    );
   }
 
   if (!authed) {
     return (
-      <div className="min-h-dvh grid place-items-center bg-[#111] p-6">
-        <form onSubmit={handleLogin} className="w-full max-w-sm space-y-4 text-white">
-          <Lock className="w-6 h-6" />
-          <h1 className="text-xl font-black">Admin</h1>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" autoFocus
-            className="w-full px-3 py-3 bg-black border-2 border-white text-white outline-none" />
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          <button type="submit" className="w-full py-3 bg-white text-black font-bold">Unlock</button>
+      <div className="min-h-dvh grid place-items-center p-6" style={{ background: "var(--bg)" }}>
+        <form onSubmit={handleLogin} className="w-full max-w-sm surface-elevated p-8 space-y-4">
+          <span className="icon-btn" style={{ width: 44, height: 44 }}>
+            <Lock className="w-5 h-5" />
+          </span>
+          <h1 className="text-xl font-extrabold tracking-tight">Admin</h1>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            autoFocus
+            className="field"
+          />
+          {error && <p className="text-sm" style={{ color: "var(--danger)" }}>{error}</p>}
+          <button type="submit" className="btn btn-primary w-full py-3">Unlock</button>
         </form>
       </div>
     );
@@ -286,26 +399,26 @@ export function Admin() {
   const totalUnread = conversations.reduce((sum, c) => sum + c.unreadCount, 0);
 
   return (
-    <div className="min-h-dvh bg-[#111] text-[#f3f3f3] p-4 sm:p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
+    <div className="min-h-dvh" style={{ background: "var(--bg)", color: "var(--ink)" }}>
+      <div className="max-w-5xl mx-auto p-4 sm:p-8 space-y-6">
         <header className="flex items-center justify-between">
-          <h1 className="text-2xl font-black">Admin</h1>
-          <button onClick={() => setAuthed(false)} className="flex items-center gap-2 text-sm opacity-70"><LogOut className="w-4 h-4" /> Lock</button>
+          <h1 className="text-2xl font-extrabold tracking-tight">Admin</h1>
+          <button onClick={() => setAuthed(false)} className="btn btn-secondary text-sm px-3 py-2">
+            <LogOut className="w-4 h-4" /> Lock
+          </button>
         </header>
-        <div className="flex flex-wrap gap-2 border-b-2 border-white/20 pb-2">
-          {([
-            { id: "chats" as const, label: "Chats", icon: MessageSquare, badge: totalUnread },
-            { id: "assets" as const, label: "Content", icon: Image },
-            { id: "playlist" as const, label: "Playlist", icon: Music },
-            { id: "movies" as const, label: "Movies", icon: Clapperboard },
-            { id: "status" as const, label: "Status", icon: Wifi },
-          ]).map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`relative flex items-center gap-2 px-3 py-2 text-sm font-bold border-2 ${tab === t.id ? "border-white bg-white text-black" : "border-transparent text-white/60"}`}>
-              <t.icon className="w-4 h-4" />{t.label}
-              {!!t.badge && (
-                <span className="absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center">
-                  {t.badge}
+
+        <div className="flex flex-wrap gap-1.5 no-scrollbar overflow-x-auto pb-1">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={cn("relative pill flex items-center gap-1.5 shrink-0", tab === t.id && "active")}
+            >
+              <t.icon className="w-3.5 h-3.5" /> {t.label}
+              {t.id === "chats" && !!totalUnread && (
+                <span className="min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center" style={{ background: "var(--danger)", color: "#fff" }}>
+                  {totalUnread}
                 </span>
               )}
             </button>
@@ -313,26 +426,30 @@ export function Admin() {
         </div>
 
         {tab === "status" && (
-          <div className="space-y-6 max-w-lg">
-            <button onClick={toggleOnline} className="flex items-center gap-2 px-4 py-3 border-2 border-white font-bold">
-              {isOnline ? <Wifi className="w-5 h-5" /> : <WifiOff className="w-5 h-5" />}
-              {isOnline ? "Online — AI off" : "Offline — AI on"}
+          <div className="space-y-4 max-w-lg">
+            <button onClick={toggleOnline} className="surface p-4 flex items-center gap-3 w-full text-left hover:shadow-md transition-shadow">
+              <span className="icon-btn" style={{ background: isOnline ? "color-mix(in srgb, #34c759 20%, transparent)" : undefined }}>
+                {isOnline ? <Wifi className="w-4 h-4" style={{ color: "#34c759" }} /> : <WifiOff className="w-4 h-4" />}
+              </span>
+              <div>
+                <div className="font-semibold text-sm">{isOnline ? "Online — AI replies off" : "Offline — AI replies on"}</div>
+                <div className="text-xs" style={{ color: "var(--muted)" }}>Tap to switch. Shows live on your Home avatar too.</div>
+              </div>
             </button>
 
-            <div className="border-2 border-white/20 p-4 space-y-3">
-              <h3 className="font-bold flex items-center gap-2"><Bell className="w-4 h-4" /> Email notifications</h3>
-              <p className="text-xs text-white/50 leading-relaxed">
-                Requires SMTP secrets set on the server (SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, etc — see .env.example).
-                Credentials are never stored here, only on the server.
+            <div className="surface-elevated p-5 space-y-3">
+              <h3 className="font-semibold flex items-center gap-2 text-sm"><Bell className="w-4 h-4" /> Email notifications</h3>
+              <p className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
+                Requires SMTP secrets set on the server (SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD…). Credentials never touch this panel.
               </p>
               <div className="relative">
-                <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
+                <Mail className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
                 <input
                   type="email"
                   placeholder="Your email (gets notified on new messages)"
                   value={notif.admin_email}
                   onChange={(e) => setNotif((p) => ({ ...p, admin_email: e.target.value }))}
-                  className="w-full pl-9 pr-3 py-2 bg-black border-2 border-white/40 text-white"
+                  className="field field-icon"
                 />
               </div>
               <label className="flex items-center gap-2 text-sm">
@@ -343,32 +460,101 @@ export function Admin() {
                 <input type="checkbox" checked={notif.notify_user_on_reply} onChange={(e) => setNotif((p) => ({ ...p, notify_user_on_reply: e.target.checked }))} />
                 Email the user when I reply to their chat
               </label>
-              <button onClick={saveNotifications} className="px-4 py-2 bg-white text-black font-bold text-sm">
-                {notifSaved ? "Saved ✓" : "Save"}
+              <button onClick={saveNotifications} className="btn btn-primary text-sm px-4 py-2">
+                {notifSaved ? <><Check className="w-4 h-4" /> Saved</> : "Save"}
               </button>
             </div>
           </div>
         )}
 
+        {tab === "profile" && (
+          <div className="space-y-4 max-w-2xl">
+            <p className="text-sm" style={{ color: "var(--muted)" }}>
+              Two identities shown on Home — visitors flip between them like a coin. Upload a photo for each; it goes straight to Supabase Storage.
+            </p>
+            <div className="grid sm:grid-cols-2 gap-4">
+              {(["online", "real"] as const).map((side) => {
+                const identity = profile[side];
+                const uploading = side === "online" ? uploadingOnline : uploadingReal;
+                const fileRef = side === "online" ? onlineFileRef : realFileRef;
+                return (
+                  <div key={side} className="surface-elevated p-5 space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-16 h-16 rounded-full overflow-hidden shrink-0" style={{ background: "var(--surface-2)" }}>
+                        {identity.avatar_url ? (
+                          <img src={identity.avatar_url} alt="" className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <UserCircle2 className="w-8 h-8" style={{ color: "var(--muted)" }} />
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-bold uppercase tracking-wide" style={{ color: "var(--accent)" }}>
+                          {side === "online" ? "Online persona" : "Real persona"}
+                        </div>
+                        <button
+                          onClick={() => fileRef.current?.click()}
+                          disabled={uploading}
+                          className="btn btn-secondary text-xs px-3 py-1.5 mt-1"
+                        >
+                          <Upload className="w-3.5 h-3.5" /> {uploading ? "Uploading…" : "Change photo"}
+                        </button>
+                        <input
+                          ref={fileRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) uploadAvatar(side, file);
+                            e.target.value = "";
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <input
+                      placeholder="Display name"
+                      value={identity.name}
+                      onChange={(e) => updateIdentity(side, { name: e.target.value })}
+                      className="field"
+                    />
+                    <input
+                      placeholder="Short bio / tagline"
+                      value={identity.bio}
+                      onChange={(e) => updateIdentity(side, { bio: e.target.value })}
+                      className="field"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <button onClick={() => saveProfile(profile)} className="btn btn-primary px-4 py-2.5">
+              {profileSaved ? <><Check className="w-4 h-4" /> Saved</> : "Save profile"}
+            </button>
+          </div>
+        )}
+
         {tab === "chats" && (
           <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4 h-[70vh]">
-            <div className={`border-2 border-white/20 overflow-y-auto ${selectedChatId ? "hidden md:block" : ""}`}>
-              {conversations.length === 0 && <p className="text-white/50 text-sm p-4">No conversations yet.</p>}
+            <div className={cn("surface overflow-y-auto", selectedChatId ? "hidden md:block" : "")}>
+              {conversations.length === 0 && <p className="text-sm p-4" style={{ color: "var(--muted)" }}>No conversations yet.</p>}
               {conversations.map((c) => (
                 <button
                   key={c.user.id}
                   onClick={() => openConversation(c.user.id)}
-                  className={`w-full text-left p-3 border-b border-white/10 flex items-start gap-2 ${selectedChatId === c.user.id ? "bg-white/10" : "hover:bg-white/5"}`}
+                  className="w-full text-left p-3 flex items-start gap-2 transition-colors"
+                  style={{ background: selectedChatId === c.user.id ? "color-mix(in srgb, var(--ink) 6%, transparent)" : undefined, borderBottom: "1px solid var(--hairline)" }}
                 >
-                  <div className="w-8 h-8 rounded-full bg-white/15 shrink-0 flex items-center justify-center text-xs font-black uppercase">
+                  <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold uppercase" style={{ background: "var(--surface-2)" }}>
                     {c.user.generated_user_id.charAt(0)}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm font-bold truncate">{c.user.generated_user_id}</div>
-                    <div className="text-xs text-white/50 truncate">{c.lastMessage.content}</div>
+                    <div className="text-sm font-semibold truncate">{c.user.generated_user_id}</div>
+                    <div className="text-xs truncate" style={{ color: "var(--muted)" }}>{c.lastMessage.content}</div>
                   </div>
                   {c.unreadCount > 0 && (
-                    <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-black flex items-center justify-center">
+                    <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center" style={{ background: "var(--danger)", color: "#fff" }}>
                       {c.unreadCount}
                     </span>
                   )}
@@ -376,42 +562,49 @@ export function Admin() {
               ))}
             </div>
 
-            <div className={`border-2 border-white/20 flex flex-col ${selectedChatId ? "" : "hidden md:flex"}`}>
+            <div className={cn("surface flex flex-col", selectedChatId ? "" : "hidden md:flex")}>
               {!selectedConvo ? (
-                <p className="text-white/50 text-sm p-4 m-auto">Select a conversation.</p>
+                <p className="text-sm p-4 m-auto" style={{ color: "var(--muted)" }}>Select a conversation.</p>
               ) : (
                 <>
-                  <div className="border-b border-white/10 p-3 flex items-center gap-2">
-                    <button onClick={() => setSelectedChatId(null)} className="md:hidden"><ArrowLeft className="w-4 h-4" /></button>
-                    <div className="font-bold text-sm">{selectedConvo.user.generated_user_id}</div>
+                  <div className="p-3 flex items-center gap-2" style={{ borderBottom: "1px solid var(--hairline)" }}>
+                    <button onClick={() => setSelectedChatId(null)} className="md:hidden icon-btn" style={{ width: 30, height: 30 }}>
+                      <ArrowLeft className="w-4 h-4" />
+                    </button>
+                    <div className="font-semibold text-sm">{selectedConvo.user.generated_user_id}</div>
                   </div>
                   <div className="flex-1 overflow-y-auto p-3 space-y-2">
                     {selectedConvo.messages.map((m) => {
                       const fromUser = m.sender_type === "user";
                       const fromAdmin = m.sender_type === "admin";
                       return (
-                        <div key={m.id} className={`flex ${fromAdmin ? "justify-end" : "justify-start"}`}>
+                        <div key={m.id} className={cn("flex", fromAdmin ? "justify-end" : "justify-start")}>
                           <div
-                            className={`max-w-[75%] px-3 py-2 text-sm rounded-lg ${
-                              fromAdmin ? "bg-white text-black" : fromUser ? "bg-white/10" : "bg-white/5 italic text-white/70"
-                            }`}
+                            className="max-w-[75%] px-3 py-2 text-sm rounded-2xl"
+                            style={
+                              fromAdmin
+                                ? { background: "var(--accent)", color: "#fff" }
+                                : { background: "color-mix(in srgb, var(--ink) 6%, transparent)" }
+                            }
                           >
-                            {!fromAdmin && !fromUser && <div className="text-[10px] uppercase tracking-wide mb-0.5 opacity-60">AI</div>}
+                            {!fromAdmin && !fromUser && (
+                              <div className="text-[10px] uppercase tracking-wide mb-0.5 opacity-60">AI</div>
+                            )}
                             {m.content}
                           </div>
                         </div>
                       );
                     })}
                   </div>
-                  <div className="border-t border-white/10 p-3 flex gap-2">
+                  <div className="p-3 flex gap-2" style={{ borderTop: "1px solid var(--hairline)" }}>
                     <input
                       value={replyText}
                       onChange={(e) => setReplyText(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && sendReply()}
                       placeholder="Reply…"
-                      className="flex-1 px-3 py-2 bg-black border-2 border-white/40 text-white text-sm"
+                      className="field flex-1"
                     />
-                    <button onClick={sendReply} disabled={!replyText.trim() || replySending} className="px-4 py-2 bg-white text-black font-bold disabled:opacity-40">
+                    <button onClick={sendReply} disabled={!replyText.trim() || replySending} className="btn btn-primary w-11 h-11 shrink-0">
                       <Send className="w-4 h-4" />
                     </button>
                   </div>
@@ -423,24 +616,41 @@ export function Admin() {
 
         {tab === "assets" && (
           <div className="space-y-4">
-            <div className="border-2 border-white p-4 space-y-2">
-              <h3 className="font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> Add content</h3>
-              <select value={newAsset.type} onChange={(e) => setNewAsset((p) => ({ ...p, type: e.target.value }))} className="w-full px-3 py-2 bg-black border-2 border-white/40">
+            <div className="surface-elevated p-5 space-y-2">
+              <h3 className="font-semibold flex items-center gap-2 text-sm"><Plus className="w-4 h-4" /> Add content</h3>
+              <select value={newAsset.type} onChange={(e) => setNewAsset((p) => ({ ...p, type: e.target.value }))} className="field">
                 <option value="photo">Photo (gallery)</option>
                 <option value="app">App</option>
                 <option value="connection">Link / contact</option>
                 <option value="link">Interest</option>
               </select>
-              <input placeholder="Title" value={newAsset.title} onChange={(e) => setNewAsset((p) => ({ ...p, title: e.target.value }))} className="w-full px-3 py-2 bg-black border-2 border-white/40" />
-              <input placeholder="Description" value={newAsset.description} onChange={(e) => setNewAsset((p) => ({ ...p, description: e.target.value }))} className="w-full px-3 py-2 bg-black border-2 border-white/40" />
-              <input placeholder="URL" value={newAsset.url} onChange={(e) => setNewAsset((p) => ({ ...p, url: e.target.value }))} className="w-full px-3 py-2 bg-black border-2 border-white/40" />
-              <input placeholder="Image URL" value={newAsset.image_url} onChange={(e) => setNewAsset((p) => ({ ...p, image_url: e.target.value }))} className="w-full px-3 py-2 bg-black border-2 border-white/40" />
-              <button onClick={addAsset} className="px-4 py-2 bg-white text-black font-bold">Add</button>
+              <input placeholder="Title" value={newAsset.title} onChange={(e) => setNewAsset((p) => ({ ...p, title: e.target.value }))} className="field" />
+              <input placeholder="Description" value={newAsset.description} onChange={(e) => setNewAsset((p) => ({ ...p, description: e.target.value }))} className="field" />
+              <input placeholder="URL" value={newAsset.url} onChange={(e) => setNewAsset((p) => ({ ...p, url: e.target.value }))} className="field" />
+              <div className="flex gap-2 items-center">
+                <input placeholder="Image URL" value={newAsset.image_url} onChange={(e) => setNewAsset((p) => ({ ...p, image_url: e.target.value }))} className="field flex-1" />
+                <button onClick={() => assetFileRef.current?.click()} disabled={uploadingAsset} className="btn btn-secondary px-3 py-2.5 shrink-0">
+                  <Upload className="w-4 h-4" /> {uploadingAsset ? "…" : "Upload"}
+                </button>
+                <input
+                  ref={assetFileRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) uploadAssetImage(file);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              <button onClick={addAsset} className="btn btn-primary px-4 py-2">Add</button>
             </div>
             {assets.map((a) => (
-              <div key={a.id} className="border-2 border-white/20 p-3 flex items-center gap-3">
-                <div className="flex-1"><div className="font-bold">{a.title}</div><div className="text-xs text-white/50">{a.type}</div></div>
-                <button onClick={() => deleteAsset(a.id)}><Trash2 className="w-4 h-4" /></button>
+              <div key={a.id} className="surface p-3 flex items-center gap-3">
+                {a.image_url && <img src={a.image_url} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />}
+                <div className="flex-1"><div className="font-semibold text-sm">{a.title}</div><div className="text-xs" style={{ color: "var(--muted)" }}>{a.type}</div></div>
+                <button onClick={() => deleteAsset(a.id)} className="icon-btn" style={{ width: 32, height: 32 }}><Trash2 className="w-4 h-4" /></button>
               </div>
             ))}
           </div>
@@ -448,17 +658,17 @@ export function Admin() {
 
         {tab === "playlist" && (
           <div className="space-y-4">
-            <p className="text-sm text-white/60">Search and tap to add — pulls title, artist, artwork, and a 30s preview clip automatically. No manual entry needed.</p>
+            <p className="text-sm" style={{ color: "var(--muted)" }}>Search and tap to add — pulls title, artist, artwork, and a 30s preview clip automatically.</p>
             <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
+              <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
               <input
                 placeholder="Search songs or artists"
                 value={musicQuery}
                 onChange={(e) => runMusicSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 bg-black border-2 border-white/40 text-white"
+                className="field field-icon"
               />
             </div>
-            {musicSearching && <p className="text-sm text-white/50">Searching…</p>}
+            {musicSearching && <p className="text-sm" style={{ color: "var(--muted)" }}>Searching…</p>}
             {musicResults.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {musicResults.map((t) => {
@@ -469,16 +679,17 @@ export function Admin() {
                       key={t.trackId}
                       onClick={() => addTrackFromSearch(t)}
                       disabled={already}
-                      className={`text-left border-2 p-2 flex gap-2 items-center ${already ? "border-white/10 opacity-40" : "border-white/20 hover:border-white"}`}
+                      className={cn("text-left surface p-2 flex gap-2 items-center", already && "opacity-40")}
                     >
-                      <div className="w-10 h-10 bg-white/10 shrink-0 overflow-hidden rounded">
+                      <div className="w-10 h-10 shrink-0 overflow-hidden rounded-lg" style={{ background: "var(--surface-2)" }}>
                         {art && <img src={art} alt="" className="w-full h-full object-cover" />}
                       </div>
                       <div className="min-w-0">
-                        <div className="text-xs font-bold truncate">{t.trackName}</div>
-                        <div className="text-[10px] text-white/50 truncate">{t.artistName}</div>
-                        {!already && <div className="text-[10px] text-white/70 mt-0.5">Tap to add</div>}
-                        {already && <div className="text-[10px] text-white/40 mt-0.5">Already added</div>}
+                        <div className="text-xs font-semibold truncate">{t.trackName}</div>
+                        <div className="text-[10px] truncate" style={{ color: "var(--muted)" }}>{t.artistName}</div>
+                        <div className="text-[10px] mt-0.5" style={{ color: already ? "var(--muted)" : "var(--accent)" }}>
+                          {already ? "Already added" : "Tap to add"}
+                        </div>
                       </div>
                     </button>
                   );
@@ -487,12 +698,13 @@ export function Admin() {
             )}
 
             <div className="pt-2 space-y-2">
-              <h3 className="font-bold text-sm text-white/70">Playlist ({playlist.length})</h3>
-              {playlist.length === 0 && <p className="text-white/50 text-sm">No tracks yet — search above.</p>}
+              <h3 className="font-semibold text-sm" style={{ color: "var(--muted)" }}>Playlist ({playlist.length})</h3>
+              {playlist.length === 0 && <p className="text-sm" style={{ color: "var(--muted)" }}>No tracks yet — search above.</p>}
               {playlist.map((t) => (
-                <div key={t.id} className="border-2 border-white/20 p-3 flex items-center gap-3">
-                  <div className="flex-1"><div className="font-bold">{t.title}</div><div className="text-xs text-white/50">{t.artist}</div></div>
-                  <button onClick={() => deleteTrack(t.id)}><Trash2 className="w-4 h-4" /></button>
+                <div key={t.id} className="surface p-3 flex items-center gap-3">
+                  {t.artwork_url && <img src={t.artwork_url} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />}
+                  <div className="flex-1"><div className="font-semibold text-sm">{t.title}</div><div className="text-xs" style={{ color: "var(--muted)" }}>{t.artist}</div></div>
+                  <button onClick={() => deleteTrack(t.id)} className="icon-btn" style={{ width: 32, height: 32 }}><Trash2 className="w-4 h-4" /></button>
                 </div>
               ))}
             </div>
@@ -501,17 +713,17 @@ export function Admin() {
 
         {tab === "movies" && (
           <div className="space-y-4">
-            <p className="text-sm text-white/60">Search TMDB and add movies to the Favourites tab on the public Movies page.</p>
+            <p className="text-sm" style={{ color: "var(--muted)" }}>Search TMDB and add movies to the Favourites tab on the public Movies page.</p>
             <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
+              <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
               <input
                 placeholder="Search movies on TMDB"
                 value={movieQuery}
                 onChange={(e) => runMovieSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 bg-black border-2 border-white/40 text-white"
+                className="field field-icon"
               />
             </div>
-            {movieSearching && <p className="text-sm text-white/50">Searching…</p>}
+            {movieSearching && <p className="text-sm" style={{ color: "var(--muted)" }}>Searching…</p>}
             {movieResults.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {movieResults.map((m) => {
@@ -522,19 +734,20 @@ export function Admin() {
                       key={m.id}
                       onClick={() => addFavoriteMovie(m)}
                       disabled={already}
-                      className={`text-left border-2 p-2 flex gap-2 items-start ${already ? "border-white/10 opacity-40" : "border-white/20 hover:border-white"}`}
+                      className={cn("text-left surface p-2 flex gap-2 items-start", already && "opacity-40")}
                     >
-                      <div className="w-10 h-14 bg-white/10 shrink-0 overflow-hidden">
+                      <div className="w-10 h-14 shrink-0 overflow-hidden rounded-lg" style={{ background: "var(--surface-2)" }}>
                         {poster && <img src={poster} alt="" className="w-full h-full object-cover" />}
                       </div>
                       <div className="min-w-0">
-                        <div className="text-xs font-bold truncate">{m.title}</div>
-                        <div className="text-[10px] text-white/50">{m.release_date?.slice(0, 4) || "TBA"}</div>
-                        <div className="text-[10px] text-white/50 flex items-center gap-1 mt-0.5">
+                        <div className="text-xs font-semibold truncate">{m.title}</div>
+                        <div className="text-[10px]" style={{ color: "var(--muted)" }}>{m.release_date?.slice(0, 4) || "TBA"}</div>
+                        <div className="text-[10px] flex items-center gap-1 mt-0.5" style={{ color: "var(--muted)" }}>
                           <Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {m.vote_average?.toFixed(1) ?? "—"}
                         </div>
-                        {!already && <div className="text-[10px] text-white/70 mt-1">Tap to add</div>}
-                        {already && <div className="text-[10px] text-white/40 mt-1">Already added</div>}
+                        <div className="text-[10px] mt-1" style={{ color: already ? "var(--muted)" : "var(--accent)" }}>
+                          {already ? "Already added" : "Tap to add"}
+                        </div>
                       </div>
                     </button>
                   );
@@ -543,17 +756,17 @@ export function Admin() {
             )}
 
             <div className="pt-2 space-y-2">
-              <h3 className="font-bold text-sm text-white/70">Favourites ({favMovies.length})</h3>
-              {favMovies.length === 0 && <p className="text-white/50 text-sm">No favourites yet — search above to add some.</p>}
+              <h3 className="font-semibold text-sm" style={{ color: "var(--muted)" }}>Favourites ({favMovies.length})</h3>
+              {favMovies.length === 0 && <p className="text-sm" style={{ color: "var(--muted)" }}>No favourites yet — search above to add some.</p>}
               {favMovies.map((f) => (
-                <div key={f.id} className="border-2 border-white/20 p-3 flex items-center gap-3">
-                  <div className="w-8 h-11 bg-white/10 shrink-0 overflow-hidden">
+                <div key={f.id} className="surface p-3 flex items-center gap-3">
+                  <div className="w-8 h-11 shrink-0 overflow-hidden rounded-lg" style={{ background: "var(--surface-2)" }}>
                     {posterUrl(f.poster_path, "w342") && (
                       <img src={posterUrl(f.poster_path, "w342")!} alt="" className="w-full h-full object-cover" />
                     )}
                   </div>
-                  <div className="flex-1"><div className="font-bold">{f.title}</div><div className="text-xs text-white/50">{f.release_date?.slice(0, 4)}</div></div>
-                  <button onClick={() => deleteFavMovie(f.id)}><Trash2 className="w-4 h-4" /></button>
+                  <div className="flex-1"><div className="font-semibold text-sm">{f.title}</div><div className="text-xs" style={{ color: "var(--muted)" }}>{f.release_date?.slice(0, 4)}</div></div>
+                  <button onClick={() => deleteFavMovie(f.id)} className="icon-btn" style={{ width: 32, height: 32 }}><Trash2 className="w-4 h-4" /></button>
                 </div>
               ))}
             </div>

@@ -36,6 +36,17 @@ export type FavoriteMovie = {
   created_at: string;
 };
 
+export type ProfileIdentity = {
+  name: string;
+  bio: string;
+  avatar_url: string | null;
+};
+
+export type SiteProfile = {
+  online: ProfileIdentity;
+  real: ProfileIdentity;
+};
+
 export type PortfolioAsset = {
   id: string;
   type: "photo" | "app" | "connection" | "link";

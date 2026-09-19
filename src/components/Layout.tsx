@@ -6,6 +6,7 @@ import { ThemeToggle } from "./ThemeToggle";
 import { MusicIsland } from "./MusicIsland";
 import { NAV } from "../lib/nav";
 import { cn } from "../lib/utils";
+import { sfxClick } from "../lib/sound";
 
 export function Layout() {
   const { pathname } = useLocation();
@@ -45,7 +46,7 @@ export function Layout() {
           </div>
         </div>
 
-        {/* Desktop nav row — plain, scrolls with the page, hidden on mobile (mobile uses the bottom bar) */}
+        {/* Desktop nav row — mobile relies on the Home hub's link list instead of a bottom bar */}
         <nav ref={scrollerRef} className="hidden md:flex items-center gap-1 no-scrollbar overflow-x-auto pb-2 pt-3">
           {NAV.map((n) => {
             const Icon = n.icon;
@@ -56,6 +57,7 @@ export function Layout() {
                 to={n.to}
                 end={n.to === "/"}
                 data-active={active}
+                onClick={sfxClick}
                 className={cn("pill flex items-center gap-1.5 shrink-0", active && "active")}
               >
                 <Icon className="w-3.5 h-3.5" strokeWidth={2.4} />
@@ -66,7 +68,7 @@ export function Layout() {
         </nav>
       </div>
 
-      <main className="max-w-5xl mx-auto px-4 pb-28 pt-4 md:pb-14">
+      <main className="max-w-5xl mx-auto px-4 pb-14 pt-4">
         <AnimatePresence mode="wait">
           <motion.div
             key={pathname}
@@ -79,27 +81,6 @@ export function Layout() {
           </motion.div>
         </AnimatePresence>
       </main>
-
-      {/* Mobile bottom tab bar — scrollable so all 8 sections fit comfortably */}
-      <nav className="tab-bar md:hidden">
-        <div className="flex items-stretch gap-1 no-scrollbar overflow-x-auto px-2">
-          {NAV.map((n) => {
-            const Icon = n.icon;
-            const active = n.to === "/" ? isRoot : pathname.startsWith(n.to);
-            return (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                end={n.to === "/"}
-                className={cn("tab-bar-item", active && "active")}
-              >
-                <Icon className="w-5 h-5" strokeWidth={active ? 2.6 : 2.1} />
-                <span>{n.label}</span>
-              </NavLink>
-            );
-          })}
-        </div>
-      </nav>
     </div>
   );
 }

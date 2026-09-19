@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Music2, Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { useMusic } from "../lib/musicStore";
+import { sfxClick } from "../lib/sound";
 
 export function MusicIsland() {
   const { track, tracks, playing, loading, ready, toggle, next, prev } = useMusic();
@@ -21,7 +22,10 @@ export function MusicIsland() {
   return (
     <div className="relative" ref={panelRef}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          sfxClick();
+          setOpen((v) => !v);
+        }}
         className="icon-btn relative"
         aria-label="Music"
         title={track ? track.title : "Playlist"}
