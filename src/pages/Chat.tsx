@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Send, LogOut, Lock, UserRound } from "lucide-react";
+import { Send, LogOut, Lock, Mail } from "lucide-react";
 import { format, isSameDay } from "date-fns";
 import { useChatSession } from "../hooks/useChatSession";
 import { supabase, type Message } from "../lib/supabase";
 import { getAIReply } from "../lib/groq";
+import { sendEmail } from "../lib/email";
 import { cn } from "../lib/utils";
 
 function DateDivider({ date }: { date: string }) {
@@ -111,6 +112,23 @@ export function Chat() {
         .single();
       if (userMsg) setMessages((prev) => (prev.some((m) => m.id === userMsg.id) ? prev : [...prev, userMsg]));
 
+      // Best-effort admin email notification — never blocks the chat flow.
+      supabase
+        .from("admin_settings")
+        .select("value")
+        .eq("key", "notifications")
+        .single()
+        .then(({ data: settings }) => {
+          const cfg = settings?.value as { admin_email?: string; notify_admin_on_message?: boolean } | undefined;
+          if (cfg?.notify_admin_on_message && cfg.admin_email) {
+            sendEmail({
+              to: cfg.admin_email,
+              subject: `New message from ${credentials.userId}`,
+              text: `${credentials.userId} says:\n\n${text}`,
+            });
+          }
+        }, () => {});
+
       let isOnline = false;
       try {
         const { data: settings } = await supabase.from("admin_settings").select("value").eq("key", "online_status").single();
@@ -157,7 +175,7 @@ export function Chat() {
       <div className="max-w-md space-y-6">
         <div className="space-y-2">
           <h1 className="text-4xl font-extrabold tracking-tight">Chat</h1>
-          <p style={{ color: "var(--muted)" }}>Pick your own username and password. No email, no OTP.</p>
+          <p style={{ color: "var(--muted)" }}>Sign in with your email and a password — we'll only use it to let you know when Vansh replies.</p>
         </div>
 
         <div className="flex gap-1 p-1 rounded-full w-fit" style={{ background: "color-mix(in srgb, var(--ink) 5%, transparent)" }}>
@@ -174,11 +192,12 @@ export function Chat() {
 
         <motion.div layout className="surface-elevated p-6 space-y-3">
           <div className="relative">
-            <UserRound className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
+            <Mail className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2" style={{ color: "var(--muted)" }} />
             <input
+              type="email"
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
-              placeholder="Username"
+              placeholder="Email"
               className="field field-icon"
             />
           </div>

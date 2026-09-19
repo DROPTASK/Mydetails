@@ -23,6 +23,19 @@ export type Message = {
   created_at: string;
 };
 
+export type FavoriteMovie = {
+  id: string;
+  tmdb_id: number;
+  title: string;
+  poster_path: string | null;
+  backdrop_path: string | null;
+  overview: string | null;
+  release_date: string | null;
+  vote_average: number | null;
+  sort_order: number;
+  created_at: string;
+};
+
 export type PortfolioAsset = {
   id: string;
   type: "photo" | "app" | "connection" | "link";

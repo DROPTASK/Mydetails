@@ -9,6 +9,7 @@ import { Links } from "./pages/Links";
 import { Movies } from "./pages/Movies";
 import { Chat } from "./pages/Chat";
 import { Admin } from "./pages/Admin";
+import { MusicProvider } from "./lib/musicStore";
 
 function getHostname() {
   try {
@@ -47,19 +48,21 @@ function AppRoutes() {
   }
 
   return (
-    <Routes>
-      <Route element={<Layout />}>
-        <Route index element={<Home />} />
-        <Route path="about" element={<About />} />
-        <Route path="apps" element={<Apps />} />
-        <Route path="movies" element={<Movies />} />
-        <Route path="interests" element={<Interests />} />
-        <Route path="gallery" element={<Gallery />} />
-        <Route path="links" element={<Links />} />
-        <Route path="chat" element={<Chat />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
+    <MusicProvider>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route index element={<Home />} />
+          <Route path="about" element={<About />} />
+          <Route path="apps" element={<Apps />} />
+          <Route path="movies" element={<Movies />} />
+          <Route path="interests" element={<Interests />} />
+          <Route path="gallery" element={<Gallery />} />
+          <Route path="links" element={<Links />} />
+          <Route path="chat" element={<Chat />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </MusicProvider>
   );
 }
 

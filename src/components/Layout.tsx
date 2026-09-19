@@ -26,47 +26,47 @@ export function Layout() {
 
   return (
     <div className="min-h-dvh" style={{ background: "var(--bg)" }}>
-      <header className="sticky top-0 z-40 glass border-b" style={{ borderColor: "var(--hairline)" }}>
-        <div className="max-w-5xl mx-auto px-4">
-          <div className="h-14 flex items-center gap-3">
-            {!isRoot ? (
-              <button onClick={() => navigate(-1)} className="icon-btn shrink-0 -ml-1.5" aria-label="Back">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-            ) : (
-              <NavLink to="/" className="font-bold tracking-tight text-[17px] shrink-0">
-                Vansh
-              </NavLink>
-            )}
-            <span className="font-semibold text-[15px] truncate">{isRoot ? "" : currentLabel}</span>
-            <div className="flex items-center gap-2 ml-auto shrink-0">
-              <MusicIsland />
-              <ThemeToggle />
-            </div>
+      {/* Plain top bar — no blur, no sticky, scrolls away with the page */}
+      <div className="max-w-5xl mx-auto px-4 pt-6">
+        <div className="h-11 flex items-center gap-3">
+          {!isRoot ? (
+            <button onClick={() => navigate(-1)} className="icon-btn shrink-0 -ml-1.5" aria-label="Back">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          ) : (
+            <NavLink to="/" className="font-bold tracking-tight text-[17px] shrink-0">
+              Vansh
+            </NavLink>
+          )}
+          <span className="font-semibold text-[15px] truncate">{isRoot ? "" : currentLabel}</span>
+          <div className="flex items-center gap-2 ml-auto shrink-0">
+            <MusicIsland />
+            <ThemeToggle />
           </div>
-
-          <nav ref={scrollerRef} className="flex items-center gap-1 no-scrollbar overflow-x-auto pb-2.5 -mt-0.5">
-            {NAV.map((n) => {
-              const Icon = n.icon;
-              const active = n.to === "/" ? isRoot : pathname.startsWith(n.to);
-              return (
-                <NavLink
-                  key={n.to}
-                  to={n.to}
-                  end={n.to === "/"}
-                  data-active={active}
-                  className={cn("pill flex items-center gap-1.5 shrink-0", active && "active")}
-                >
-                  <Icon className="w-3.5 h-3.5" strokeWidth={2.4} />
-                  {n.label}
-                </NavLink>
-              );
-            })}
-          </nav>
         </div>
-      </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-8 md:py-14">
+        {/* Desktop nav row — plain, scrolls with the page, hidden on mobile (mobile uses the bottom bar) */}
+        <nav ref={scrollerRef} className="hidden md:flex items-center gap-1 no-scrollbar overflow-x-auto pb-2 pt-3">
+          {NAV.map((n) => {
+            const Icon = n.icon;
+            const active = n.to === "/" ? isRoot : pathname.startsWith(n.to);
+            return (
+              <NavLink
+                key={n.to}
+                to={n.to}
+                end={n.to === "/"}
+                data-active={active}
+                className={cn("pill flex items-center gap-1.5 shrink-0", active && "active")}
+              >
+                <Icon className="w-3.5 h-3.5" strokeWidth={2.4} />
+                {n.label}
+              </NavLink>
+            );
+          })}
+        </nav>
+      </div>
+
+      <main className="max-w-5xl mx-auto px-4 pb-28 pt-4 md:pb-14">
         <AnimatePresence mode="wait">
           <motion.div
             key={pathname}
@@ -79,6 +79,27 @@ export function Layout() {
           </motion.div>
         </AnimatePresence>
       </main>
+
+      {/* Mobile bottom tab bar — scrollable so all 8 sections fit comfortably */}
+      <nav className="tab-bar md:hidden">
+        <div className="flex items-stretch gap-1 no-scrollbar overflow-x-auto px-2">
+          {NAV.map((n) => {
+            const Icon = n.icon;
+            const active = n.to === "/" ? isRoot : pathname.startsWith(n.to);
+            return (
+              <NavLink
+                key={n.to}
+                to={n.to}
+                end={n.to === "/"}
+                className={cn("tab-bar-item", active && "active")}
+              >
+                <Icon className="w-5 h-5" strokeWidth={active ? 2.6 : 2.1} />
+                <span>{n.label}</span>
+              </NavLink>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }

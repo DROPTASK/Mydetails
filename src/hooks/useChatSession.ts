@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { simpleHash } from "../lib/utils";
+import { isEmail } from "../lib/email";
 
 const STORAGE_KEY = "vk_chat_credentials";
 
@@ -37,8 +38,8 @@ export function useChatSession() {
 
   const register = useCallback(async (userId: string, password: string) => {
     setError(null);
-    const id = userId.trim();
-    if (id.length < 3) return setError("Username must be at least 3 characters");
+    const id = userId.trim().toLowerCase();
+    if (!isEmail(id)) return setError("Enter a valid email address");
     if (password.length < 6) return setError("Password must be at least 6 characters");
     setIsLoading(true);
     try {
@@ -50,7 +51,7 @@ export function useChatSession() {
         .single();
       if (insertError) {
         if (String(insertError.message).includes("duplicate") || insertError.code === "23505") {
-          throw new Error("That username is taken");
+          throw new Error("An account with that email already exists — try signing in");
         }
         throw insertError;
       }
@@ -71,9 +72,9 @@ export function useChatSession() {
       const { data, error: fetchError } = await supabase
         .from("chat_users")
         .select("*")
-        .eq("generated_user_id", userId.trim())
+        .eq("generated_user_id", userId.trim().toLowerCase())
         .single();
-      if (fetchError || !data) throw new Error("Unknown username");
+      if (fetchError || !data) throw new Error("No account with that email");
       const hash = await simpleHash(password);
       if (hash !== data.generated_password_hash) throw new Error("Wrong password");
       const creds = { userId: data.generated_user_id, password, dbId: data.id };
