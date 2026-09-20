@@ -3,6 +3,8 @@ import { NavLink } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { NAV } from "../lib/nav";
 import { ProfileSwap } from "../components/ProfileSwap";
+import { SocialLinks } from "../components/SocialLinks";
+import { WebCorner, StickerBadge, FloatingSparkle } from "../components/Stickers";
 import { sfxClick } from "../lib/sound";
 
 const container = {
@@ -16,24 +18,41 @@ const item = {
 
 export function Home() {
   return (
-    <motion.div
-      variants={container}
-      initial="hidden"
-      animate="show"
-      className="max-w-md mx-auto flex flex-col items-center gap-8 pt-4"
-    >
-      <motion.div variants={item}>
-        <ProfileSwap />
-      </motion.div>
+    <div className="relative">
+      <WebCorner className="absolute -top-2 -right-2 w-24 h-24 text-[var(--ink)] opacity-[0.08] pointer-events-none" />
+      <FloatingSparkle style={{ top: 4, left: "8%" }} />
+      <FloatingSparkle style={{ top: 60, right: "10%", animationDelay: "1.1s" }} />
+      <FloatingSparkle style={{ bottom: 20, left: "18%", animationDelay: "2s" }} />
 
-      <motion.div variants={item} className="w-full flex flex-col gap-2.5">
-        {NAV.filter((n) => n.to !== "/").map((n) => (
-          <NavLink key={n.to} to={n.to} onClick={sfxClick} className="link-pill">
-            <span>{n.label}</span>
-            <ChevronRight className="w-4 h-4 opacity-40" strokeWidth={2.4} />
-          </NavLink>
-        ))}
+      <motion.div
+        variants={container}
+        initial="hidden"
+        animate="show"
+        className="max-w-md mx-auto flex flex-col items-center gap-6 pt-4"
+      >
+        <motion.div variants={item}>
+          <ProfileSwap />
+        </motion.div>
+
+        <motion.div variants={item} className="flex flex-wrap justify-center gap-2">
+          <StickerBadge label="🎓 Class 11" rotate={-6} />
+          <StickerBadge label="💻 CS student" rotate={4} />
+          <StickerBadge label="🎧 Always vibing" rotate={-3} />
+        </motion.div>
+
+        <motion.div variants={item}>
+          <SocialLinks />
+        </motion.div>
+
+        <motion.div variants={item} className="w-full flex flex-col gap-2.5 mt-2">
+          {NAV.filter((n) => n.to !== "/").map((n) => (
+            <NavLink key={n.to} to={n.to} onClick={sfxClick} className="link-pill">
+              <span>{n.label}</span>
+              <ChevronRight className="w-4 h-4 opacity-40" strokeWidth={2.4} />
+            </NavLink>
+          ))}
+        </motion.div>
       </motion.div>
-    </motion.div>
+    </div>
   );
 }

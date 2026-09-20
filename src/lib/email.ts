@@ -13,6 +13,14 @@ export async function sendEmail(params: { to: string; subject: string; text: str
       console.warn("Email notification failed:", error);
       return false;
     }
+    if (data?.skipped) {
+      console.warn("Email notification skipped — SMTP secrets not configured on the server.");
+      return false;
+    }
+    if (data?.error) {
+      console.warn("Email notification failed:", data.error, data.detail || "");
+      return false;
+    }
     return Boolean(data?.sent);
   } catch (err) {
     console.warn("Email notification failed:", err);

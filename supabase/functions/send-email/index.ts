@@ -22,6 +22,16 @@ function isValidEmail(value: unknown): value is string {
   return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+function defaultHtml(subject: string, text: string) {
+  return `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#0a0a0a;color:#fff;border-radius:16px">
+    <p style="font-size:13px;letter-spacing:.05em;text-transform:uppercase;color:#888;margin:0 0 12px">New message</p>
+    <h2 style="margin:0 0 16px;font-size:20px">${subject}</h2>
+    <p style="font-size:15px;line-height:1.6;color:#ddd;white-space:pre-wrap">${text}</p>
+    <hr style="border:none;border-top:1px solid #222;margin:24px 0" />
+    <p style="font-size:12px;color:#666;margin:0">Sent from vanshkumar.in</p>
+  </div>`;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -72,7 +82,7 @@ serve(async (req) => {
       to,
       subject,
       content: text,
-      html: html || undefined,
+      html: html || defaultHtml(subject, text),
     });
     await client.close();
 
@@ -81,7 +91,10 @@ serve(async (req) => {
     });
   } catch (err) {
     console.error("send-email error:", err);
-    return new Response(JSON.stringify({ error: "Failed to send email" }), {
+    // Surface the real reason (auth failure, wrong port, host unreachable, etc.)
+    // instead of a generic message — this is what you were missing to debug SMTP.
+    const message = err instanceof Error ? err.message : String(err);
+    return new Response(JSON.stringify({ error: "Failed to send email", detail: message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

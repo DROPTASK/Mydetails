@@ -68,6 +68,17 @@ export async function searchMovies(query: string): Promise<Movie[]> {
   return data.results;
 }
 
+/** Popular Hindi-language (Bollywood) movies — used to seed the word-guess game. */
+export async function getBollywoodMovies(page = 1): Promise<Movie[]> {
+  const data = await tmdb<{ results: Movie[] }>(`/discover/movie`, {
+    with_original_language: "hi",
+    sort_by: "popularity.desc",
+    page: String(page),
+    "vote_count.gte": "50",
+  });
+  return data.results.filter((m) => m.title && m.title.replace(/[^a-zA-Z]/g, "").length >= 4);
+}
+
 export async function getMovieDetails(id: number): Promise<MovieDetails> {
   return tmdb<MovieDetails>(`/movie/${id}`);
 }

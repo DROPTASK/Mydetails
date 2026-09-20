@@ -621,7 +621,8 @@ export function Admin() {
               <select value={newAsset.type} onChange={(e) => setNewAsset((p) => ({ ...p, type: e.target.value }))} className="field">
                 <option value="photo">Photo (gallery)</option>
                 <option value="app">App</option>
-                <option value="connection">Link / contact</option>
+                <option value="game">Game (loved games)</option>
+                <option value="connection">Link / contact / social</option>
                 <option value="link">Interest</option>
               </select>
               <input placeholder="Title" value={newAsset.title} onChange={(e) => setNewAsset((p) => ({ ...p, title: e.target.value }))} className="field" />

@@ -1,32 +1,29 @@
-import { AnimatePresence, motion } from "framer-motion";
-import { Moon, Sun } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
 import { sfxToggle } from "../lib/sound";
 
 export function ThemeToggle({ className }: { className?: string }) {
   const { theme, toggle } = useTheme();
+  const isDark = theme === "dark";
+
   return (
     <button
       onClick={() => {
         sfxToggle();
         toggle();
       }}
-      className={cn("icon-btn overflow-hidden", className)}
       aria-label="Toggle theme"
+      className={cn("weather-switch", className)}
+      data-on={isDark}
     >
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.span
-          key={theme}
-          initial={{ rotate: -90, opacity: 0, scale: 0.5 }}
-          animate={{ rotate: 0, opacity: 1, scale: 1 }}
-          exit={{ rotate: 90, opacity: 0, scale: 0.5 }}
-          transition={{ duration: 0.25, ease: "easeOut" }}
-          className="flex"
-        >
-          {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-        </motion.span>
-      </AnimatePresence>
+      <span className="weather-switch-sky">
+        <span className="weather-cloud weather-cloud-1" />
+        <span className="weather-cloud weather-cloud-2" />
+        <span className="weather-star weather-star-1" />
+        <span className="weather-star weather-star-2" />
+        <span className="weather-star weather-star-3" />
+      </span>
+      <span className="weather-switch-thumb">{isDark ? "🌙" : "☀️"}</span>
     </button>
   );
 }

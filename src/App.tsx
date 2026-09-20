@@ -7,6 +7,12 @@ import { Interests } from "./pages/Interests";
 import { Gallery } from "./pages/Gallery";
 import { Links } from "./pages/Links";
 import { Movies } from "./pages/Movies";
+import { Games } from "./pages/Games";
+import { BollywoodSolo } from "./pages/games/Bollywood";
+import { BollywoodCreateRoom } from "./pages/games/BollywoodCreateRoom";
+import { BollywoodRoom } from "./pages/games/BollywoodRoom";
+import { TicTacToe } from "./pages/games/TicTacToe";
+import { RockPaperScissors } from "./pages/games/RockPaperScissors";
 import { Chat } from "./pages/Chat";
 import { Admin } from "./pages/Admin";
 import { MusicProvider } from "./lib/musicStore";
@@ -55,6 +61,12 @@ function AppRoutes() {
           <Route path="about" element={<About />} />
           <Route path="apps" element={<Apps />} />
           <Route path="movies" element={<Movies />} />
+          <Route path="games" element={<Games />} />
+          <Route path="games/bollywood/solo" element={<BollywoodSolo />} />
+          <Route path="games/bollywood/multiplayer" element={<BollywoodCreateRoom />} />
+          <Route path="games/bollywood/room/:code" element={<BollywoodRoom />} />
+          <Route path="games/tic-tac-toe" element={<TicTacToe />} />
+          <Route path="games/rock-paper-scissors" element={<RockPaperScissors />} />
           <Route path="interests" element={<Interests />} />
           <Route path="gallery" element={<Gallery />} />
           <Route path="links" element={<Links />} />

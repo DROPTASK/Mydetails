@@ -26,8 +26,16 @@ Groq is called only via the `ai-reply` Edge Function. The key never enters the c
 - **Realtime** — chat, the admin inbox, playlist, gallery/links, and the profile/online-status all update live via Supabase Realtime, no refresh needed.
 - **Admin panel** restyled to match the public site's Apple-style light/dark surfaces instead of the old black/white brutalist look, plus a new Profile tab.
 - Mobile bottom tab bar removed — Home's link list is the nav on mobile now.
+- **Aesthetic pass** — sun/moon sliding theme switch, a segmented rectangle tab control (used on Games), brand-colored social icon buttons, decorative sparkles/sticker badges/gradient glow across the site. (Skipped the literal Spider-Man sticker — that's Marvel's copyrighted character — and used a generic geometric web doodle instead.)
+- **Social links** — add them from Admin → Content (type: Link/contact/social); they render as icon buttons below the profile on Home, platform auto-detected from the URL.
+- **Games section** (`/games`) — a "Loved" tab (your own editable game picks, added the same way as Apps/Movies) and a "Play" tab with three playable games:
+  - **Tic-Tac-Toe** — local 2-player.
+  - **Rock-Paper-Scissors** — vs CPU.
+  - **Bollywood** — a Hangman-style word game. Solo mode fetches a real title from TMDB (vowels shown, consonants hidden, on-screen keyboard, configurable lives, automatic hint at the halfway mark). Multiplayer mode creates a shareable room — anyone who opens the link joins with just a nickname (no auth), everyone gets the same movie, and Realtime syncs each player's progress (shown to others as colour-only boxes, never the letters) plus an in-room chat.
 
-Run **all four** migrations in order in the Supabase SQL Editor (001 → 004) — 004 is new and required for the profile/avatar features and Realtime.
+Run **all five** migrations in order in the Supabase SQL Editor (001 → 005) — 004 and 005 are new and required for the profile/avatar features, Realtime, and the multiplayer game rooms.
+
+**Heads up on the multiplayer game:** the room's answer sits in the `game_rooms` table under the same permissive access model as the rest of this app (see `001_initial_schema.sql`), so it's readable directly from the table by anyone who looks — fine for a casual portfolio game, but not spoiler-proof against someone poking at the network tab.
 
 ## Setup
 

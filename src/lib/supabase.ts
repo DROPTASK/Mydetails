@@ -47,6 +47,16 @@ export type SiteProfile = {
   real: ProfileIdentity;
 };
 
+export type GameRoom = {
+  id: string;
+  room_code: string;
+  movie_id: number;
+  movie_title: string;
+  poster_path: string | null;
+  lives: number;
+  created_at: string;
+};
+
 export type PortfolioAsset = {
   id: string;
   type: "photo" | "app" | "connection" | "link";

@@ -38,7 +38,12 @@ html, body { margin: 0; min-height: 100%; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", sans-serif;
-  background: var(--bg);
+  background:
+    radial-gradient(600px circle at 12% -8%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+    radial-gradient(500px circle at 92% 8%, color-mix(in srgb, #ff2d92 10%, transparent), transparent 55%),
+    radial-gradient(700px circle at 50% 115%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -165,6 +170,140 @@ body {
 }
 .link-pill:hover { box-shadow: var(--shadow-md); }
 .link-pill:active { transform: scale(0.98); }
+
+/* ---------- Weather sun/moon theme switch ---------- */
+.weather-switch {
+  position: relative;
+  width: 64px;
+  height: 34px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #7ec8f2, #bfe4fb);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+  transition: background 0.5s ease;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+.weather-switch[data-on="true"] {
+  background: linear-gradient(180deg, #0b1030, #1c1f4a);
+}
+.weather-switch-sky { position: absolute; inset: 0; }
+.weather-cloud {
+  position: absolute;
+  background: #fff;
+  border-radius: 999px;
+  opacity: 0.9;
+  transition: opacity 0.3s ease;
+}
+.weather-cloud-1 { width: 16px; height: 6px; top: 8px; left: 8px; }
+.weather-cloud-2 { width: 11px; height: 5px; top: 21px; left: 6px; }
+.weather-switch[data-on="true"] .weather-cloud { opacity: 0; }
+.weather-star {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  background: #fff;
+  border-radius: 999px;
+  opacity: 0;
+  transition: opacity 0.4s ease 0.1s;
+}
+.weather-star-1 { top: 7px; left: 10px; }
+.weather-star-2 { top: 17px; left: 6px; }
+.weather-star-3 { top: 11px; left: 18px; }
+.weather-switch[data-on="true"] .weather-star { opacity: 1; }
+.weather-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #fff9e6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  box-shadow: 0 0 12px 2px rgba(255, 214, 0, 0.55), var(--shadow-sm);
+  transition: transform 0.4s cubic-bezier(0.68, -0.4, 0.32, 1.4), background 0.4s ease, box-shadow 0.4s ease;
+}
+.weather-switch[data-on="true"] .weather-switch-thumb {
+  transform: translateX(30px);
+  background: #cfd6f2;
+  box-shadow: 0 0 10px 1px rgba(180, 190, 255, 0.5), var(--shadow-sm);
+}
+
+/* ---------- Segmented tabs (rectangle, shorter, sliding) ---------- */
+.segmented-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  height: 36px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.dark .segmented-tabs { background: color-mix(in srgb, #fff 8%, transparent); }
+.segmented-tab {
+  padding: 0 1.1rem;
+  border-radius: 9px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--muted);
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+.segmented-tab.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- Social icon buttons ---------- */
+.social-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.social-btn:hover { transform: translateY(-2px) scale(1.05); box-shadow: var(--shadow-md); }
+.social-btn:active { transform: scale(0.94); }
+
+/* ---------- Game keyboard keys ---------- */
+.key-cap {
+  min-width: 28px;
+  height: 40px;
+  padding: 0 0.4rem;
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.1s ease, background-color 0.2s ease, opacity 0.2s ease;
+}
+.key-cap:active:not(:disabled) { transform: scale(0.92); }
+.key-cap-used { opacity: 0.3; background: var(--surface-2); }
+.key-cap-correct { background: #34c759; color: #fff; opacity: 1; border-color: transparent; }
+@keyframes letter-pop { 0% { transform: scale(0.6); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
+.letter-pop { animation: letter-pop 0.3s ease; }
+
+/* ---------- Floating decorative sparkle ---------- */
+.floating-sparkle {
+  position: absolute;
+  color: var(--accent);
+  opacity: 0.5;
+  animation: sparkle-float 3.4s ease-in-out infinite;
+  pointer-events: none;
+  user-select: none;
+}
+@keyframes sparkle-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.35; }
+  50% { transform: translateY(-8px) rotate(20deg); opacity: 0.8; }
+}
 }
 
 
