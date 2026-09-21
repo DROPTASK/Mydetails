@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Gamepad2, Users, User, Hand, Grid3x3 } from "lucide-react";
 import { supabase, type PortfolioAsset } from "../lib/supabase";
 import { SegmentedTabs } from "../components/SegmentedTabs";
+import { TiltCard } from "../components/TiltCard";
 import { sfxClick } from "../lib/sound";
 
 const PLAY_ITEMS = [
@@ -48,13 +49,15 @@ export function Games() {
       {tab === "play" && (
         <div className="grid sm:grid-cols-2 gap-3">
           {PLAY_ITEMS.map((item) => (
-            <Link key={item.to} to={item.to} onClick={sfxClick} className="surface-elevated p-4 flex items-center gap-3 hover:shadow-md transition-shadow">
-              <span className="text-3xl">{item.emoji}</span>
-              <div>
-                <div className="font-bold text-sm">{item.label}</div>
-                <div className="text-xs" style={{ color: "var(--muted)" }}>{item.desc}</div>
-              </div>
-            </Link>
+            <TiltCard key={item.to} intensity={4}>
+              <Link to={item.to} onClick={sfxClick} className="surface-elevated p-4 flex items-center gap-3 hover:shadow-md transition-shadow">
+                <span className="text-3xl">{item.emoji}</span>
+                <div>
+                  <div className="font-bold text-sm">{item.label}</div>
+                  <div className="text-xs" style={{ color: "var(--muted)" }}>{item.desc}</div>
+                </div>
+              </Link>
+            </TiltCard>
           ))}
         </div>
       )}

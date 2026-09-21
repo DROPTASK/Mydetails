@@ -1,20 +1,22 @@
-import { useEffect, useState } from "react";
-import { Heart, RotateCcw, Lightbulb, Loader2 } from "lucide-react";
-import { getBollywoodMovies, posterUrl, hasTmdbKey, type Movie } from "../../lib/tmdb";
-import { buildWordState, guessLetter, type WordState } from "../../lib/bollywoodGame";
+import { useState } from "react";
+import { Heart, RotateCcw, Loader2 } from "lucide-react";
+import { getBollywoodMovies, getMovieHintData, posterUrl, hasTmdbKey, type Movie, type MovieHintData } from "../../lib/tmdb";
+import { buildWordState, guessLetter, hintAvailable, markHintUsed, type WordState } from "../../lib/bollywoodGame";
 import { WordBoard } from "../../components/games/WordBoard";
 import { Keyboard } from "../../components/games/Keyboard";
+import { HintPicker } from "../../components/games/HintPicker";
 import { sfxCoin, sfxPop } from "../../lib/sound";
 
-const LIFE_OPTIONS = [3, 5, 7, 10];
+const LIFE_OPTIONS = [4, 6, 8];
 
 export function BollywoodSolo() {
-  const [lives, setLives] = useState(5);
+  const [lives, setLives] = useState(6);
   const [started, setStarted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [movie, setMovie] = useState<Movie | null>(null);
   const [state, setState] = useState<WordState | null>(null);
+  const [hintData, setHintData] = useState<MovieHintData | null>(null);
 
   const start = async () => {
     setLoading(true);
@@ -27,6 +29,7 @@ export function BollywoodSolo() {
       setMovie(pick);
       setState(buildWordState(pick.title, lives));
       setStarted(true);
+      getMovieHintData(pick.id, pick.release_date).then(setHintData).catch(() => setHintData(null));
     } catch {
       setError(hasTmdbKey() ? "Couldn't load a movie — try again." : "TMDB API key isn't configured, so this game can't fetch movies.");
     } finally {
@@ -46,17 +49,21 @@ export function BollywoodSolo() {
     setStarted(false);
     setMovie(null);
     setState(null);
+    setHintData(null);
   };
 
   if (!started) {
     return (
-      <div className="max-w-sm mx-auto text-center space-y-5 pt-6">
-        <h2 className="text-2xl font-extrabold">🎬 Bollywood — Solo</h2>
-        <p className="text-sm" style={{ color: "var(--muted)" }}>
-          Vowels are shown for free. Guess the consonants before you run out of lives — you'll get one hint halfway through.
-        </p>
+      <div className="max-w-sm mx-auto text-center space-y-6 pt-8">
+        <div className="text-5xl">🎬</div>
         <div>
-          <p className="text-xs font-semibold mb-2" style={{ color: "var(--muted)" }}>Lives</p>
+          <h2 className="text-2xl font-bold tracking-tight">Bollywood</h2>
+          <p className="text-sm mt-1.5" style={{ color: "var(--muted)" }}>
+            Vowels are free. Guess the consonants before your lives run out — a hint unlocks halfway.
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--muted)" }}>Lives</p>
           <div className="flex justify-center gap-2">
             {LIFE_OPTIONS.map((n) => (
               <button key={n} onClick={() => setLives(n)} className={`pill ${lives === n ? "active" : ""}`}>
@@ -76,40 +83,39 @@ export function BollywoodSolo() {
   if (!state || !movie) return null;
 
   return (
-    <div className="max-w-md mx-auto text-center space-y-5 pt-4">
+    <div className="max-w-md mx-auto text-center space-y-6 pt-4">
       <div className="flex items-center justify-center gap-1">
         {Array.from({ length: state.maxLives }).map((_, i) => (
           <Heart
             key={i}
             className="w-5 h-5"
-            style={{ color: i < state.livesLeft ? "#ff3b30" : "var(--surface-2)" }}
-            fill={i < state.livesLeft ? "#ff3b30" : "none"}
+            style={{ color: i < state.livesLeft ? "#e2795a" : "var(--surface-2)" }}
+            fill={i < state.livesLeft ? "#e2795a" : "none"}
           />
         ))}
       </div>
 
       <WordBoard cells={state.cells} />
 
-      {state.hintUsed && state.status === "playing" && (
-        <p className="text-xs flex items-center justify-center gap-1" style={{ color: "var(--accent)" }}>
-          <Lightbulb className="w-3.5 h-3.5" /> Hint used — one letter revealed for free
-        </p>
-      )}
-
       {state.status === "playing" && (
-        <Keyboard
-          guessed={state.guessed}
-          correctLetters={Array.from(new Set<string>(state.cells.filter((c) => c.status === "revealed").map((c) => c.char.toLowerCase())))}
-          onGuess={guess}
-        />
+        <>
+          {(hintAvailable(state) || state.hintUsed) && (
+            <HintPicker movieTitle={movie.title} hintData={hintData} onUsed={() => setState((s) => (s ? markHintUsed(s) : s))} />
+          )}
+          <Keyboard
+            guessed={state.guessed}
+            correctLetters={Array.from(new Set<string>(state.cells.filter((c) => c.status === "revealed").map((c) => c.char.toLowerCase())))}
+            onGuess={guess}
+          />
+        </>
       )}
 
       {state.status !== "playing" && (
         <div className="space-y-3">
-          <p className="text-lg font-extrabold">{state.status === "won" ? "🎉 You got it!" : "😅 Out of lives"}</p>
+          <p className="text-lg font-bold">{state.status === "won" ? "You got it! 🎉" : "Out of lives 😅"}</p>
           <div className="flex items-center justify-center gap-3">
             {posterUrl(movie.poster_path, "w342") && (
-              <img src={posterUrl(movie.poster_path, "w342")!} alt="" className="w-14 h-20 rounded-lg object-cover" />
+              <img src={posterUrl(movie.poster_path, "w342")!} alt="" className="w-14 h-20 rounded-xl object-cover shadow-md" />
             )}
             <div className="text-left">
               <div className="font-bold">{movie.title}</div>

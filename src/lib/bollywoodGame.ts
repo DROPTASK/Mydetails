@@ -18,6 +18,16 @@ export function isVowel(ch: string) {
   return VOWELS.has(ch.toLowerCase());
 }
 
+/** A sentence hint unlocks once half the lives are used — once per game. */
+export function hintAvailable(state: WordState): boolean {
+  const usedLives = state.maxLives - state.livesLeft;
+  return state.status === "playing" && !state.hintUsed && usedLives >= Math.ceil(state.maxLives / 2);
+}
+
+export function markHintUsed(state: WordState): WordState {
+  return { ...state, hintUsed: true };
+}
+
 export function buildWordState(title: string, maxLives: number): WordState {
   const cells: LetterCell[] = [...title].map((ch) => {
     if (!/[a-zA-Z]/.test(ch)) return { char: ch, status: "space" };
@@ -48,21 +58,10 @@ export function guessLetter(state: WordState, letterRaw: string): WordState {
   const guessed = [...state.guessed, letter];
   const livesLeft = present ? state.livesLeft : state.livesLeft - 1;
 
-  let hintUsed = state.hintUsed;
-  let finalCells = cells;
-  const usedLives = state.maxLives - livesLeft;
-  if (!hintUsed && usedLives >= Math.ceil(state.maxLives / 2) && livesLeft > 0) {
-    const hiddenIdx = finalCells.findIndex((c) => c.status === "hidden");
-    if (hiddenIdx !== -1) {
-      finalCells = finalCells.map((c, i) => (i === hiddenIdx ? { ...c, status: "revealed" as LetterStatus } : c));
-      hintUsed = true;
-    }
-  }
-
-  const won = !finalCells.some((c) => c.status === "hidden");
+  const won = !cells.some((c) => c.status === "hidden");
   const status: WordState["status"] = won ? "won" : livesLeft <= 0 ? "lost" : "playing";
 
-  return { ...state, cells: finalCells, guessed, livesLeft, hintUsed, status };
+  return { ...state, cells, guessed, livesLeft, status };
 }
 
 /** Colour-only snapshot for showing an opponent's progress without revealing letters. */

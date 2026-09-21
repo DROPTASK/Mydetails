@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { RefreshCw } from "lucide-react";
 import { supabase, type SiteProfile } from "../lib/supabase";
 import { Avatar } from "./Avatar";
+import { TiltCard } from "./TiltCard";
 import { sfxCoin } from "../lib/sound";
 
 const SIDE_KEY = "vk_profile_side";
@@ -84,13 +85,15 @@ export function ProfileSwap() {
         className="relative"
         style={{ perspective: 600 }}
       >
-        <motion.div
-          animate={{ rotateY: flipping ? 180 : 0 }}
-          transition={{ duration: 0.42, ease: [0.65, 0, 0.35, 1] }}
-          style={{ transformStyle: "preserve-3d" }}
-        >
-          <Avatar src={current.avatar_url} name={current.name} size={104} />
-        </motion.div>
+        <TiltCard intensity={10}>
+          <motion.div
+            animate={{ rotateY: flipping ? 180 : 0 }}
+            transition={{ duration: 0.42, ease: [0.65, 0, 0.35, 1] }}
+            style={{ transformStyle: "preserve-3d" }}
+          >
+            <Avatar src={current.avatar_url} name={current.name} size={104} />
+          </motion.div>
+        </TiltCard>
         {isOnline && (
           <span
             className="absolute bottom-1 right-1 w-4 h-4 rounded-full border-2"

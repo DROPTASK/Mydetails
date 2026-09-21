@@ -46,7 +46,7 @@ export function WordBoard({
                   color: self ? "var(--ink)" : "transparent",
                 }}
               >
-                {self && cell.status !== "hidden" ? cell.char : self ? "" : ""}
+                {self ? (cell.status !== "hidden" ? cell.char : "") : ""}
               </div>
             ))}
           </div>

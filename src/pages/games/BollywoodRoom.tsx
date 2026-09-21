@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Heart, Copy, Check, Send, Loader2, Lightbulb } from "lucide-react";
+import { Heart, Copy, Check, Send, Loader2 } from "lucide-react";
 import { supabase, type GameRoom } from "../../lib/supabase";
-import { buildWordState, guessLetter, toOpponentSnapshot, type WordState, type OpponentSnapshot } from "../../lib/bollywoodGame";
+import { getMovieHintData, type MovieHintData } from "../../lib/tmdb";
+import { buildWordState, guessLetter, hintAvailable, markHintUsed, toOpponentSnapshot, type WordState, type OpponentSnapshot } from "../../lib/bollywoodGame";
 import { WordBoard } from "../../components/games/WordBoard";
 import { Keyboard } from "../../components/games/Keyboard";
+import { HintPicker } from "../../components/games/HintPicker";
 import { sfxCoin, sfxPop, sfxSend } from "../../lib/sound";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
@@ -17,11 +19,13 @@ export function BollywoodRoom() {
   const [nickname, setNickname] = useState("");
   const [joined, setJoined] = useState(false);
   const [state, setState] = useState<WordState | null>(null);
+  const [hintData, setHintData] = useState<MovieHintData | null>(null);
   const [peers, setPeers] = useState<Record<string, PeerInfo>>({});
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [copied, setCopied] = useState(false);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const selfKeyRef = useRef<string>(crypto.randomUUID());
 
   useEffect(() => {
     if (!code) return;
@@ -38,16 +42,17 @@ export function BollywoodRoom() {
     const initial = buildWordState(room.movie_title, room.lives);
     setState(initial);
     setJoined(true);
+    getMovieHintData(room.movie_id, "").then(setHintData).catch(() => setHintData(null));
 
-    const channel = supabase.channel(`bw-room-${room.room_code}`, { config: { presence: { key: crypto.randomUUID() } } });
+    const channel = supabase.channel(`bw-room-${room.room_code}`, { config: { presence: { key: selfKeyRef.current } } });
     channelRef.current = channel;
 
     channel.on("presence", { event: "sync" }, () => {
       const raw = channel.presenceState<PeerInfo>();
       const next: Record<string, PeerInfo> = {};
       for (const key of Object.keys(raw)) {
-        const entries = raw[key];
-        if (entries?.[0]) next[key] = entries[0];
+        if (key === selfKeyRef.current) continue; // never show yourself in the "opponents" list
+        if (raw[key]?.[0]) next[key] = raw[key][0];
       }
       setPeers(next);
     });
@@ -108,7 +113,7 @@ export function BollywoodRoom() {
   if (!joined) {
     return (
       <div className="max-w-sm mx-auto text-center space-y-4 pt-8">
-        <h2 className="text-xl font-extrabold">Join room {room.room_code}</h2>
+        <h2 className="text-xl font-bold">Join room {room.room_code}</h2>
         <p className="text-sm" style={{ color: "var(--muted)" }}>{room.lives} lives · Everyone plays the same movie</p>
         <input
           value={nickname}
@@ -137,55 +142,53 @@ export function BollywoodRoom() {
       </div>
 
       {/* Your board */}
-      <div className="text-center space-y-3">
+      <div className="text-center space-y-4">
         <div className="flex items-center justify-center gap-1">
           {Array.from({ length: state.maxLives }).map((_, i) => (
-            <Heart key={i} className="w-4 h-4" style={{ color: i < state.livesLeft ? "#ff3b30" : "var(--surface-2)" }} fill={i < state.livesLeft ? "#ff3b30" : "none"} />
+            <Heart key={i} className="w-4 h-4" style={{ color: i < state.livesLeft ? "#e2795a" : "var(--surface-2)" }} fill={i < state.livesLeft ? "#e2795a" : "none"} />
           ))}
         </div>
         <WordBoard cells={state.cells} />
-        {state.hintUsed && state.status === "playing" && (
-          <p className="text-xs flex items-center justify-center gap-1" style={{ color: "var(--accent)" }}>
-            <Lightbulb className="w-3.5 h-3.5" /> Hint used
-          </p>
-        )}
         {state.status === "playing" ? (
-          <Keyboard
-            guessed={state.guessed}
-            correctLetters={Array.from(new Set<string>(state.cells.filter((c) => c.status === "revealed").map((c) => c.char.toLowerCase())))}
-            onGuess={guess}
-          />
+          <>
+            {(hintAvailable(state) || state.hintUsed) && (
+              <HintPicker movieTitle={room.movie_title} hintData={hintData} onUsed={() => setState((s) => (s ? markHintUsed(s) : s))} />
+            )}
+            <Keyboard
+              guessed={state.guessed}
+              correctLetters={Array.from(new Set<string>(state.cells.filter((c) => c.status === "revealed").map((c) => c.char.toLowerCase())))}
+              onGuess={guess}
+            />
+          </>
         ) : (
-          <p className="text-lg font-extrabold">
+          <p className="text-lg font-bold">
             {state.status === "won" ? `🎉 ${room.movie_title}` : `😅 It was ${room.movie_title}`}
           </p>
         )}
       </div>
 
       {/* Opponents */}
-      {Object.keys(peers).filter((k) => peers[k].nickname !== nickname.trim()).length > 0 && (
+      {Object.keys(peers).length > 0 && (
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-center" style={{ color: "var(--muted)" }}>
             Playing with you
           </h3>
-          {Object.entries(peers)
-            .filter(([, p]) => p.nickname !== nickname.trim())
-            .map(([key, p]) => (
-              <div key={key} className="surface p-3 space-y-2 text-center">
-                <div className="text-xs font-semibold flex items-center justify-center gap-2">
-                  {p.nickname}
-                  {p.snapshot && (
-                    <span className="flex items-center gap-0.5">
-                      {Array.from({ length: room.lives }).map((_, i) => (
-                        <Heart key={i} className="w-3 h-3" style={{ color: p.snapshot && i < p.snapshot.livesLeft ? "#ff3b30" : "var(--surface-2)" }} fill={p.snapshot && i < p.snapshot.livesLeft ? "#ff3b30" : "none"} />
-                      ))}
-                    </span>
-                  )}
-                  {p.snapshot?.status === "won" && <span>🎉</span>}
-                </div>
-                {p.snapshot && <WordBoard statuses={p.snapshot.statuses} self={false} />}
+          {Object.entries(peers).map(([key, p]) => (
+            <div key={key} className="surface p-3 space-y-2 text-center">
+              <div className="text-xs font-semibold flex items-center justify-center gap-2">
+                {p.nickname}
+                {p.snapshot && (
+                  <span className="flex items-center gap-0.5">
+                    {Array.from({ length: room.lives }).map((_, i) => (
+                      <Heart key={i} className="w-3 h-3" style={{ color: p.snapshot && i < p.snapshot.livesLeft ? "#e2795a" : "var(--surface-2)" }} fill={p.snapshot && i < p.snapshot.livesLeft ? "#e2795a" : "none"} />
+                    ))}
+                  </span>
+                )}
+                {p.snapshot?.status === "won" && <span>🎉</span>}
               </div>
-            ))}
+              {p.snapshot && <WordBoard statuses={p.snapshot.statuses} self={false} />}
+            </div>
+          ))}
         </div>
       )}
 

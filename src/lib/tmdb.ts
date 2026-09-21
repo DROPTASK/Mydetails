@@ -82,3 +82,29 @@ export async function getBollywoodMovies(page = 1): Promise<Movie[]> {
 export async function getMovieDetails(id: number): Promise<MovieDetails> {
   return tmdb<MovieDetails>(`/movie/${id}`);
 }
+
+export type MovieHintData = {
+  overview: string;
+  tagline: string;
+  genres: string[];
+  year: string;
+  leadActor: string | null;
+  director: string | null;
+};
+
+/** One extra call, bundling credits — everything the hint picker needs about a movie. */
+export async function getMovieHintData(id: number, releaseDate: string): Promise<MovieHintData> {
+  const data = await tmdb<
+    MovieDetails & { credits: { cast: { name: string; order: number }[]; crew: { name: string; job: string }[] } }
+  >(`/movie/${id}`, { append_to_response: "credits" });
+  const lead = [...(data.credits?.cast || [])].sort((a, b) => a.order - b.order)[0];
+  const director = data.credits?.crew?.find((c) => c.job === "Director");
+  return {
+    overview: data.overview,
+    tagline: data.tagline,
+    genres: (data.genres || []).map((g) => g.name),
+    year: releaseDate?.slice(0, 4) || "",
+    leadActor: lead?.name || null,
+    director: director?.name || null,
+  };
+}

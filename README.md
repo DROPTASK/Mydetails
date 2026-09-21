@@ -37,6 +37,19 @@ Run **all five** migrations in order in the Supabase SQL Editor (001 → 005) �
 
 **Heads up on the multiplayer game:** the room's answer sits in the `game_rooms` table under the same permissive access model as the rest of this app (see `001_initial_schema.sql`), so it's readable directly from the table by anyone who looks — fine for a casual portfolio game, but not spoiler-proof against someone poking at the network tab.
 
+## What's new in this pass
+
+- **Visual redesign** — moved from the icon-sticker aesthetic to a calmer, professional look: warm cozy color palette (terracotta accent, cream/espresso surfaces instead of stark black-and-white), soft layered shadows, and a subtle mouse-tracked 3D tilt on the profile avatar and game cards (`src/components/TiltCard.tsx`).
+- **Bollywood hint system rebuilt** — instead of auto-revealing a random letter, hitting the hint (unlocked halfway through your lives) now offers a choice of hint *types* — Plot, Lead actor, and two more picked at random each game (Director / Genre / Release year / Tagline, whichever the movie has) — and shows a sentence instead of spoiling a letter. The plot hint is phrased by **Grok** (xAI) when configured, and falls back to a plain TMDB-sourced line if it isn't — the game always works either way.
+  - Deploy: `supabase functions deploy movie-hint --no-verify-jwt`
+  - Optional secret: `supabase secrets set GROK_API_KEY=xai-...` (get one at console.x.ai) — without it, hints just skip the AI phrasing step.
+- **Game bug fixes**:
+  - Multiplayer: fixed a bug where a player could see themselves listed as an "opponent" (was matching by nickname, which breaks with duplicate names — now matches by a stable per-connection key).
+  - The old hint mechanic had a bug where using it could instantly hide itself again — that whole mechanic is replaced by the sentence-hint system above.
+  - Keyboard now hides vowels entirely instead of showing them as unusable — simpler, less confusing.
+
+Run migrations **001 → 005** in order if you haven't already (005 added the multiplayer `game_rooms` table).
+
 ## Setup
 
 ```bash
