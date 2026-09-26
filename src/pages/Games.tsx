@@ -9,8 +9,8 @@ import { sfxClick } from "../lib/sound";
 const PLAY_ITEMS = [
   {
     to: "/games/bollywood",
-    label: "Bollywood Movie Quiz",
-    desc: "Guess the Hindi film letter by letter. Choose Solo puzzle or Live Multiplayer room battles!",
+    label: "Cinema Movie Quiz",
+    desc: "Guess films across Bollywood, Hollywood, Tollywood, & Kollywood. Solo puzzle or live multiplayer with stream chat!",
     icon: Clapperboard,
     emoji: "🎬",
     badge: "Solo & Multiplayer",

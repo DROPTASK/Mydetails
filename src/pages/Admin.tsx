@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Lock, Image as ImageIcon, Trash2, Plus, LogOut, Wifi, WifiOff, Music, Clapperboard,
-  Search, Star, MessageSquare, Send, ArrowLeft, Mail, Bell, UserCircle2, Upload, Check, Film,
+  Search, Star, MessageSquare, Send, ArrowLeft, Mail, Bell, UserCircle2, Upload, Check, Film, Link2,
 } from "lucide-react";
 import { supabase, type Message, type PortfolioAsset, type FavoriteMovie, type ChatUser, type SiteProfile, type BollywoodMovieRecord } from "../lib/supabase";
 import type { PlaylistTrack } from "../lib/musicStore";
@@ -11,6 +11,8 @@ import { sendEmail, isEmail } from "../lib/email";
 import { uploadToPortfolioBucket } from "../lib/storage";
 import { sfxToggle } from "../lib/sound";
 import { cn } from "../lib/utils";
+import { Shortener } from "./Shortener";
+import { isAdminSession, setAdminSession } from "../lib/adminAuth";
 
 const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || "";
 
@@ -36,6 +38,7 @@ const TABS = [
   { id: "chats" as const, label: "Chats", icon: MessageSquare },
   { id: "profile" as const, label: "Profile", icon: UserCircle2 },
   { id: "assets" as const, label: "Content", icon: ImageIcon },
+  { id: "shortlinks" as const, label: "Short Links", icon: Link2 },
   { id: "playlist" as const, label: "Playlist", icon: Music },
   { id: "movies" as const, label: "Movies", icon: Clapperboard },
   { id: "bollywood" as const, label: "Bollywood DB", icon: Film },
@@ -99,12 +102,18 @@ export function Admin() {
     ) {
       setHostnameOk(true);
     }
+
+    if (isAdminSession()) {
+      setAuthed(true);
+      loadData();
+    }
   }, []);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (ADMIN_PASSWORD && password === ADMIN_PASSWORD) {
+    if (!ADMIN_PASSWORD || password === ADMIN_PASSWORD) {
       setAuthed(true);
+      setAdminSession(true);
       setError("");
       loadData();
     } else {
@@ -444,7 +453,13 @@ export function Admin() {
       <div className="max-w-5xl mx-auto p-4 sm:p-8 space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-extrabold tracking-tight">Admin</h1>
-          <button onClick={() => setAuthed(false)} className="btn btn-secondary text-sm px-3 py-2">
+          <button
+            onClick={() => {
+              setAuthed(false);
+              setAdminSession(false);
+            }}
+            className="btn btn-secondary text-sm px-3 py-2"
+          >
             <LogOut className="w-4 h-4" /> Lock
           </button>
         </header>
@@ -695,6 +710,12 @@ export function Admin() {
                 <button onClick={() => deleteAsset(a.id)} className="icon-btn" style={{ width: 32, height: 32 }}><Trash2 className="w-4 h-4" /></button>
               </div>
             ))}
+          </div>
+        )}
+
+        {tab === "shortlinks" && (
+          <div className="space-y-4">
+            <Shortener isAdmin={true} />
           </div>
         )}
 

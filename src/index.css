@@ -323,21 +323,44 @@ body {
 /* ---------- Game keyboard keys ---------- */
 .key-cap {
   min-width: 28px;
-  height: 40px;
-  padding: 0 0.4rem;
-  border-radius: 8px;
+  height: 42px;
+  padding: 0 0.35rem;
+  border-radius: 10px;
   background: var(--surface);
   border: 1px solid var(--hairline);
-  font-weight: 700;
-  font-size: 0.8rem;
+  font-weight: 800;
+  font-size: 0.85rem;
   text-transform: uppercase;
   color: var(--ink);
-  box-shadow: var(--shadow-sm);
-  transition: transform 0.1s ease, background-color 0.2s ease, opacity 0.2s ease;
+  box-shadow: 0 2px 0 0 var(--hairline), var(--shadow-sm);
+  transition: transform 0.08s ease, background-color 0.15s ease, opacity 0.15s ease, box-shadow 0.08s ease;
+  user-select: none;
 }
-.key-cap:active:not(:disabled) { transform: scale(0.92); }
-.key-cap-used { opacity: 0.3; background: var(--surface-2); }
-.key-cap-correct { background: #34c759; color: #fff; opacity: 1; border-color: transparent; }
+.key-cap:hover:not(:disabled):not(.key-cap-vowel) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--hairline));
+  transform: translateY(-1px);
+}
+.key-cap:active:not(:disabled) {
+  transform: translateY(1.5px) scale(0.96);
+  box-shadow: 0 0.5px 0 0 var(--hairline);
+}
+.key-cap-vowel {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline));
+  opacity: 0.95;
+}
+.key-cap-used {
+  opacity: 0.35;
+  background: var(--surface-2);
+  box-shadow: none;
+}
+.key-cap-correct {
+  background: #34c759 !important;
+  color: #fff !important;
+  opacity: 1 !important;
+  border-color: #2fb350 !important;
+  box-shadow: 0 2px 8px rgba(52, 199, 89, 0.4) !important;
+}
 @keyframes letter-pop { 0% { transform: scale(0.6); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
 .letter-pop { animation: letter-pop 0.3s ease; }
 

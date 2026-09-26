@@ -18,10 +18,19 @@ export function isVowel(ch: string) {
   return VOWELS.has(ch.toLowerCase());
 }
 
-/** A sentence hint unlocks once half the lives are used — once per game. */
+/** A sentence hint unlocks once half the lives are used (or after 3 wrong guesses in unlimited mode) — once per game. */
 export function hintAvailable(state: WordState): boolean {
+  if (state.status !== "playing" || state.hintUsed) return false;
+
+  if (state.maxLives >= 999) {
+    const wrongCount = state.guessed.filter(
+      (g) => !state.cells.some((c) => c.char.toLowerCase() === g)
+    ).length;
+    return wrongCount >= 3;
+  }
+
   const usedLives = state.maxLives - state.livesLeft;
-  return state.status === "playing" && !state.hintUsed && usedLives >= Math.ceil(state.maxLives / 2);
+  return usedLives >= Math.ceil(state.maxLives / 2);
 }
 
 export function markHintUsed(state: WordState): WordState {
@@ -45,7 +54,7 @@ export function buildWordState(title: string, maxLives: number): WordState {
   };
 }
 
-/** Applies a single letter guess and returns the next state. Pure function. */
+/** Applies a single letter guess and returns the next state. Supports unlimited lives. */
 export function guessLetter(state: WordState, letterRaw: string): WordState {
   if (state.status !== "playing") return state;
   const letter = letterRaw.toLowerCase();
@@ -56,12 +65,23 @@ export function guessLetter(state: WordState, letterRaw: string): WordState {
     c.char.toLowerCase() === letter && c.status === "hidden" ? { ...c, status: "revealed" as LetterStatus } : c
   );
   const guessed = [...state.guessed, letter];
-  const livesLeft = present ? state.livesLeft : state.livesLeft - 1;
+
+  // If maxLives >= 999, lives are unlimited and never decrease
+  const isUnlimited = state.maxLives >= 999;
+  const livesLeft = isUnlimited ? state.livesLeft : present ? state.livesLeft : state.livesLeft - 1;
 
   const won = !cells.some((c) => c.status === "hidden");
-  const status: WordState["status"] = won ? "won" : livesLeft <= 0 ? "lost" : "playing";
+  const status: WordState["status"] = won ? "won" : !isUnlimited && livesLeft <= 0 ? "lost" : "playing";
 
   return { ...state, cells, guessed, livesLeft, status };
+}
+
+/** Reveals all letters in the word (e.g. when round is won or lost) */
+export function revealAllLetters(state: WordState): WordState {
+  const cells = state.cells.map((c) =>
+    c.status === "hidden" ? { ...c, status: "revealed" as LetterStatus } : c
+  );
+  return { ...state, cells };
 }
 
 /** Colour-only snapshot for showing an opponent's progress without revealing letters. */

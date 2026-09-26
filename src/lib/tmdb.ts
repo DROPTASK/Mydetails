@@ -68,9 +68,9 @@ export async function searchMovies(query: string): Promise<Movie[]> {
   return data.results;
 }
 
-import { getDatabaseBollywoodMovies, getDatabaseBollywoodMovieById } from "./bollywoodMovies";
+import { CURATED_MOVIES, findCinemaMovie } from "./cinemaMovies";
 
-/** Popular Hindi-language (Bollywood) movies — queried directly from database or TMDB API. */
+/** Popular Hindi-language (Bollywood) movies — queried directly from TMDB API or curated pool. */
 export async function getBollywoodMovies(page = 1): Promise<Movie[]> {
   if (hasTmdbKey()) {
     try {
@@ -83,25 +83,21 @@ export async function getBollywoodMovies(page = 1): Promise<Movie[]> {
       const filtered = data.results.filter((m) => m.title && m.title.replace(/[^a-zA-Z]/g, "").length >= 4);
       if (filtered.length > 0) return filtered;
     } catch {
-      // Fall through to database
+      // Fall through to curated fallback
     }
   }
 
-  // Database Bollywood movie pool
-  const dbMovies = await getDatabaseBollywoodMovies();
-  if (dbMovies.length > 0) {
-    return dbMovies.map((m) => ({
-      id: m.id,
-      title: m.title,
-      overview: m.overview,
-      poster_path: m.poster_path,
-      backdrop_path: m.poster_path,
-      release_date: `${m.year}-01-01`,
-      vote_average: 8.5,
-    }));
-  }
-
-  return [];
+  // Curated Bollywood movie pool (zero DB dependency)
+  const bMovies = CURATED_MOVIES.filter((m) => m.industry === "bollywood");
+  return bMovies.map((m) => ({
+    id: m.id,
+    title: m.title,
+    overview: m.overview,
+    poster_path: m.poster_path,
+    backdrop_path: m.poster_path,
+    release_date: `${m.year}-01-01`,
+    vote_average: m.vote_average || 8.5,
+  }));
 }
 
 export async function getMovieDetails(id: number): Promise<MovieDetails> {
@@ -135,26 +131,26 @@ export async function getMovieHintData(id: number, releaseDate: string): Promise
         director: director?.name || null,
       };
     } catch {
-      // Fall back to database
+      // Fall back to curated
     }
   }
 
-  const dbMovie = await getDatabaseBollywoodMovieById(id);
-  if (dbMovie) {
+  const found = findCinemaMovie(id);
+  if (found) {
     return {
-      overview: dbMovie.overview,
-      tagline: dbMovie.tagline,
-      genres: dbMovie.genres,
-      year: dbMovie.year,
-      leadActor: dbMovie.leadActor || dbMovie.lead_actor || "Bollywood Star",
-      director: dbMovie.director || "Director",
+      overview: found.overview,
+      tagline: found.tagline,
+      genres: found.genres,
+      year: found.year,
+      leadActor: found.leadActor,
+      director: found.director,
     };
   }
 
   return {
-    overview: "A beloved Hindi cinema classic celebrating life, friendship, and emotion.",
+    overview: "A beloved cinema classic celebrating life, friendship, and emotion.",
     tagline: "An unforgettable story.",
-    genres: ["Drama", "Bollywood"],
+    genres: ["Drama", "Cinema"],
     year: releaseDate?.slice(0, 4) || "2015",
     leadActor: "Star Ensemble",
     director: "Acclaimed Filmmaker",

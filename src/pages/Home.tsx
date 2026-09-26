@@ -12,6 +12,13 @@ import { ProfileSwap } from "../components/ProfileSwap";
 import { SocialLinks } from "../components/SocialLinks";
 import { sfxClick } from "../lib/sound";
 import { supabase, type PortfolioAsset, type AboutBio } from "../lib/supabase";
+import { DEFAULT_PORTFOLIO_ASSETS, DEFAULT_ABOUT_BIO } from "../lib/fallbackData";
+
+const defaultFeaturedApps = DEFAULT_PORTFOLIO_ASSETS.filter((a) => a.type === "app").slice(0, 4);
+const defaultCounts: Record<string, number> = DEFAULT_PORTFOLIO_ASSETS.reduce((acc, curr) => {
+  acc[curr.type] = (acc[curr.type] || 0) + 1;
+  return acc;
+}, {} as Record<string, number>);
 
 const container = {
   hidden: {},
@@ -24,9 +31,9 @@ const item = {
 
 export function Home() {
   const [time, setTime] = useState("");
-  const [featuredApps, setFeaturedApps] = useState<PortfolioAsset[]>([]);
-  const [counts, setCounts] = useState<Record<string, number>>({});
-  const [bio, setBio] = useState<AboutBio | null>(null);
+  const [featuredApps, setFeaturedApps] = useState<PortfolioAsset[]>(defaultFeaturedApps);
+  const [counts, setCounts] = useState<Record<string, number>>(defaultCounts);
+  const [bio, setBio] = useState<AboutBio | null>(DEFAULT_ABOUT_BIO);
 
   useEffect(() => {
     const updateTime = () => {
@@ -122,7 +129,7 @@ export function Home() {
           </span>
           <div className="min-w-0">
             <span className="font-semibold text-[var(--ink)] block truncate">
-              {bio?.status_title || "Class 12 CS • CBSE"}
+              {bio?.status_title || "Class 11 CS • Arjuna JEE 2.0"}
             </span>
             <span className="text-[var(--muted)] text-xs block truncate">
               {bio?.status_subtitle || "Building AnonRoom & JeeFlow"}
@@ -132,7 +139,7 @@ export function Home() {
 
         <div className="flex items-center gap-1.5 shrink-0 px-2.5 py-1 rounded-full bg-[var(--surface-2)] text-[var(--muted)] font-mono text-xs">
           <Clock className="w-3 h-3 text-[var(--accent)]" />
-          <span>{time || "IST"}</span>
+          <span>{time || "Meerut (IST)"}</span>
         </div>
       </motion.div>
 
@@ -158,13 +165,13 @@ export function Home() {
               id: "anonroom",
               title: "AnonRoom",
               description: "Ephemeral anonymous live chat rooms with WebSockets.",
-              url: "https://anonroom.in",
+              url: "https://anonroom.vanshkumar.in",
             },
             {
               id: "jeeflow",
               title: "JeeFlow",
-              description: "Study planner, syllabus tracker & countdown.",
-              url: "https://jeeflow.in",
+              description: "JEE 2026 prep planner, syllabus tracker & countdown.",
+              url: "https://jeeflow.vanshkumar.in",
             },
           ]).map((app) => (
             <a

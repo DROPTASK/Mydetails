@@ -154,6 +154,15 @@ export function CommandPalette({
         keywords: ["socials", "contact", "bookmarks"],
       },
       {
+        id: "nav-shortener",
+        title: "Link Shortener",
+        subtitle: "Create custom vanshkumar.in/<personalized> short links",
+        category: "Pages",
+        icon: Link2,
+        perform: () => navigate("/shortener"),
+        keywords: ["shortener", "url", "vanity", "link", "vanshkumar.in", "slug"],
+      },
+      {
         id: "nav-chat",
         title: "Live Chat / Guestbook",
         subtitle: "Send a message or talk to AI assistant",

@@ -14,6 +14,7 @@ import {
   type MovieDetails,
 } from "../lib/tmdb";
 import { supabase, type FavoriteMovie } from "../lib/supabase";
+import { DEFAULT_FAVORITE_MOVIES } from "../lib/fallbackData";
 import { useMusic } from "../lib/musicStore";
 
 function useDebounced<T>(value: T, delay = 350) {
@@ -280,10 +281,17 @@ export function Movies() {
       .order("sort_order")
       .then(
         ({ data }) => {
-          setFavorites((data as FavoriteMovie[]) || []);
+          if (data && data.length > 0) {
+            setFavorites(data as FavoriteMovie[]);
+          } else {
+            setFavorites(DEFAULT_FAVORITE_MOVIES);
+          }
           setFavLoading(false);
         },
-        () => setFavLoading(false)
+        () => {
+          setFavorites(DEFAULT_FAVORITE_MOVIES);
+          setFavLoading(false);
+        }
       );
   }, []);
 
