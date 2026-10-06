@@ -8,6 +8,14 @@ import { sfxClick } from "../lib/sound";
 
 const PLAY_ITEMS = [
   {
+    to: "/games/sonic",
+    label: "Sonic HTML5",
+    desc: "Classic Green Hill Zone sprint! Collect 50 rings, jump spikes, chase down Dr. Eggman with on-screen mobile buttons or keyboard.",
+    icon: Gamepad2,
+    emoji: "🦔",
+    badge: "Mobile & Desktop",
+  },
+  {
     to: "/games/8ball-pool",
     label: "8-Ball Pool",
     desc: "Realistic billiards simulation with physics, cue spin controls, vs AI and 2-Player mode",
@@ -76,7 +84,7 @@ export function Games() {
           value={tab}
           onChange={setTab}
           options={[
-            { id: "play", label: "Play Now (4)" },
+            { id: "play", label: "Play Now (5)" },
             { id: "loved", label: "Favorite Games" },
           ]}
         />

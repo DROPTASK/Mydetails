@@ -1,0 +1,710 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Press Start 2P', monospace, sans-serif;
+  color: #ffffff;
+}
+
+html, body {
+  background-color: #0b0f19;
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 100vh;
+  padding: 10px 8px 20px;
+}
+
+/* Master Game Container */
+#game-root {
+  width: 100%;
+  max-width: 900px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 0 auto;
+}
+
+/* Iconic Sonic Header & Story */
+.game-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.game-logo {
+  max-height: 65px;
+  max-width: 280px;
+  width: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.7));
+}
+
+.story-tag {
+  font-size: 9px;
+  color: #ffeb3b;
+  text-shadow: 0 0 6px rgba(255, 235, 59, 0.5), 1px 1px 2px #000;
+  line-height: 1.4;
+  max-width: 540px;
+}
+
+/* Top Mini Bar / HUD */
+.arcade-top-hud {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  background: rgba(18, 24, 38, 0.9);
+  border: 2px solid #233554;
+  border-radius: 12px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+}
+
+.hud-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hud-zone-tag {
+  font-size: 10px;
+  color: #00e1ff;
+  letter-spacing: 0.5px;
+  text-shadow: 0 0 8px rgba(0, 225, 255, 0.6);
+}
+
+.hud-badge {
+  font-size: 8px;
+  background: rgba(255, 215, 0, 0.15);
+  color: #ffd700;
+  border: 1px solid rgba(255, 215, 0, 0.4);
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.hud-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hud-btn {
+  background: #1c2538;
+  border: 1.5px solid #3b4e76;
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.hud-btn:hover {
+  background: #2b3956;
+  border-color: #00e1ff;
+  color: #00e1ff;
+}
+
+.hud-btn:active {
+  transform: scale(0.95);
+}
+
+/* Scalable Stage Viewport Container */
+#game-stage-wrapper {
+  position: relative;
+  width: 900px;
+  height: 240px;
+  overflow: hidden;
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 0 2px #203354;
+  background: #000000;
+  margin: 0 auto;
+}
+
+#game-stage-scaler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 900px;
+  height: 240px;
+  transform-origin: top left;
+}
+
+/* Green Hill Zone Game Canvas Field */
+.background {
+  width: 900px;
+  height: 240px;
+  background-image: url("./assests/ground1.jpg");
+  background-repeat: repeat-x;
+  background-position: left bottom;
+  background-color: #204080;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+  image-rendering: pixelated;
+}
+
+.background2 {
+  animation-name: floor;
+  animation-duration: 0.1s;
+  animation-iteration-count: infinite;
+}
+
+/* Sonic Character */
+.sonic {
+  height: 70px;
+  width: 50px;
+  background-image: url("./sonic/01.png");
+  background-size: cover;
+  position: relative;
+  z-index: 10;
+  display: block;
+}
+
+.moving {
+  animation-name: running;
+  animation-iteration-count: infinite;
+  animation-duration: 0.2s;
+}
+
+.sonic2 {
+  height: 70px;
+  width: 50px;
+  background-image: url("./sonic/01.png"); 
+  background-size: cover;
+  transform: scaleX(-1);
+  position: relative;
+  z-index: 10;
+  display: block;
+}
+
+.moving2 {
+  animation-name: running2;
+  animation-iteration-count: infinite;
+  animation-duration: 0.2s;
+}
+
+.jumping {
+  animation-name: jump;
+  animation-duration: 0.4s;
+  animation-iteration-count: initial;
+}
+
+.jumping2 {
+  animation-name: jump2;
+  animation-duration: 0.3s;
+}
+
+.died {
+  height: 83px !important;
+  width: 70px !important;
+  background-image: url("./sonic/died.png") !important;
+  background-size: cover !important;
+  position: relative;
+  z-index: 10;
+  display: block;
+}
+
+/* Collectibles: Rings */
+.ring, .ring2, .ring3, .ring4, .ring5, .ring6, .ring7, .ring8, .ring9, .ring10,
+.ring11, .ring12, .ring13, .ring14, .ring15, .ring16, .ring17, .ring18, .ring19,
+.ring20, .ring21, .ring22, .ring23, .ring24, .ring25, .ring26, .ring27,
+.ring28, .ring29, .ring30, .ring31, .ring32, .ring33, .ring34, .ring35, .ring36,
+.ring37, .ring38, .ring39, .ring40, .ring41, .ring42, .ring43, .ring44, .ring45,
+.ring46, .ring47, .ring48, .ring49, .ring50 {
+  height: 40px;
+  width: 40px;
+  background-image: url("./assests/ring2.gif") !important;
+  background-size: cover;
+  position: relative;
+  z-index: 5;
+  display: block;
+}
+
+/* Obstacles: Spikes */
+.spikes, .spikes2, .spikes3, .spikes4, .spikes5 {
+  height: 90px;
+  width: 75px;
+  background-image: url("./assests/spikes.png");
+  background-size: cover;
+  position: relative;
+  z-index: 6;
+  display: block;
+}
+
+/* Boss: Dr. Eggman */
+.eggman, .eggman2 {
+  width: 120px;
+  height: 140px;
+  background-image: url("./assests/eggman2.gif");
+  background-size: cover;
+  position: relative;
+  z-index: 7;
+  display: block;
+}
+
+.eggman2 {
+  background-image: url("./assests/eggman.gif");
+}
+
+.eggRun {
+  width: 125px;
+  height: 135px;
+  background-image: url("./assests/eggman.gif");
+  background-size: cover;
+  position: relative;
+  z-index: 7;
+  display: block;
+}
+
+.eggLoses {
+  background-image: url("./assests/eggloses.gif");
+  width: 165px;
+  background-size: cover;
+  position: relative;
+  z-index: 7;
+  display: block;
+}
+
+.blink {
+  background-image: url("./assests/source.gif") !important;
+  opacity: 0 !important;
+  animation-name: blink !important;
+  animation-duration: 0.8s !important;
+  animation-iteration-count: initial !important;
+}
+
+.score {
+  display: block;
+  position: relative;
+  z-index: 20;
+  font-size: 14px;
+  text-shadow: 2px 2px #000;
+}
+
+.keep {
+  width: 20px;
+  height: 20px;
+  opacity: 0;
+  display: block;
+  position: relative;
+  z-index: 20;
+  font-size: 14px;
+  text-shadow: 2px 2px #000;
+}
+
+.keep2 {
+  animation-name: run;
+  animation-duration: 0.5s;
+  animation-iteration-count: infinite;
+}
+
+.win {
+  width: 260px;
+  opacity: 0;
+  display: block;
+  position: relative;
+  z-index: 25;
+  font-size: 18px;
+  text-shadow: 2px 2px #000;
+}
+
+.die {
+  width: 260px;
+  opacity: 0;
+  display: block;
+  position: relative;
+  z-index: 25;
+  font-size: 18px;
+  text-shadow: 2px 2px #000;
+}
+
+.mostrar {
+  opacity: 1 !important;
+}
+
+/* Keyframes */
+@keyframes run {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes running {
+  25% {
+    background-image: url("./sonic/03.png");
+    background-size: cover;
+    width: 55px;
+  }
+  50% {
+    background-image: url("./sonic/04.png");
+    background-size: cover;
+    width: 55px;
+  }
+  75% {
+    background-image: url("./sonic/05.png");
+    background-size: cover;
+    width: 55px;
+  }
+  100% {
+    background-image: url("./sonic/06.png");
+    background-size: cover;
+    width: 55px;
+  }
+}
+
+@keyframes running2 {
+  25% {
+    background-image: url("./sonic/03.png");
+    background-size: cover;
+    width: 55px;
+    transform: scaleX(-1);
+  }
+  50% {
+    background-image: url("./sonic/04.png");
+    background-size: cover;
+    width: 55px;
+    transform: scaleX(-1);
+  }
+  75% {
+    background-image: url("./sonic/05.png");
+    background-size: cover;
+    width: 55px;
+    transform: scaleX(-1);
+  }
+  100% {
+    background-image: url("./sonic/06.png");
+    background-size: cover;
+    width: 55px;
+    transform: scaleX(-1);
+  }
+}
+
+@keyframes jump {
+  25% {
+    background-image: url("./sonic/007.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+    transform: translateY(-115px);
+  }
+  50% {
+    background-image: url("./sonic/08.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+    transform: translateY(-105px);
+  }
+  75% {
+    background-image: url("./sonic/09.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+    transform: translateY(-95px);
+  }
+  100% {
+    background-image: url("./sonic/10.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+  }
+}
+
+@keyframes jump2 {
+  25% {
+    background-image: url("./sonic/007.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+    transform: translateY(-75px) scaleX(-1);
+  }
+  50% {
+    background-image: url("./sonic/08.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+    transform: scaleX(-1);
+  }
+  75% {
+    background-image: url("./sonic/09.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+    transform: scaleX(-1);
+  }
+  100% {
+    background-image: url("./sonic/10.png");
+    background-size: cover;
+    width: 60px;
+    height: 60px;
+    transform: scaleX(-1);
+  }
+}
+
+@keyframes floor {
+  0% { background-image: url("./assests/ground1.jpg"); }
+  100% { background-image: url("./assests/ground2.jpg"); }
+}
+
+@keyframes blink {
+  0% { background-image: url("./assests/source.gif"); opacity: 0; }
+  50% { background-image: url("./assests/source.gif"); opacity: 1; }
+  100% { background-image: url("./assests/source.gif"); opacity: 0; }
+}
+
+/* ========================================================
+   TACTILE ON-SCREEN MOBILE CONTROLS
+   ======================================================== */
+#mobile-controls {
+  width: 100%;
+  max-width: 900px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, #161e2e 0%, #0d121c 100%);
+  border: 2px solid #233554;
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  touch-action: none;
+}
+
+.dpad-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ctrl-btn {
+  background: linear-gradient(180deg, #243048 0%, #151d2c 100%);
+  border: 2px solid #3c5079;
+  border-radius: 14px;
+  color: #fff;
+  font-size: 16px;
+  padding: 0;
+  width: 72px;
+  height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 0 #0d131e, 0 10px 15px rgba(0, 0, 0, 0.4);
+  transition: transform 0.08s ease, box-shadow 0.08s ease, border-color 0.1s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.ctrl-btn:active, .ctrl-btn.pressed {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 #0d131e, 0 4px 8px rgba(0, 0, 0, 0.6);
+  border-color: #00e1ff;
+  background: linear-gradient(180deg, #2b3a58 0%, #1a2538 100%);
+}
+
+.ctrl-btn .icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.ctrl-btn .label {
+  font-size: 8px;
+  color: #8da2c4;
+  margin-top: 4px;
+  letter-spacing: 0.5px;
+}
+
+/* Action / Jump Button */
+.action-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.jump-btn {
+  background: linear-gradient(180deg, #ff3b30 0%, #b8140a 100%);
+  border: 2px solid #ff7066;
+  border-radius: 16px;
+  color: #fff;
+  width: 110px;
+  height: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 0 #6e0903, 0 10px 18px rgba(255, 59, 48, 0.3);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.jump-btn:active, .jump-btn.pressed {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 #6e0903, 0 4px 8px rgba(255, 59, 48, 0.4);
+  background: linear-gradient(180deg, #ff5247 0%, #cc190f 100%);
+}
+
+.jump-btn .icon {
+  font-size: 18px;
+  line-height: 1;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+.jump-btn .label {
+  font-size: 9px;
+  color: #fff;
+  margin-top: 4px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+/* Modals for Game Over & Victory */
+.game-modal {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  text-align: center;
+  padding: 20px;
+  animation: fadeIn 0.25s ease-out;
+}
+
+.game-modal.active {
+  display: flex !important;
+}
+
+.modal-content {
+  background: #141c2c;
+  border: 3px solid #ffcc00;
+  border-radius: 16px;
+  padding: 20px 24px;
+  max-width: 420px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(255, 204, 0, 0.3);
+}
+
+.modal-title {
+  font-size: 16px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.modal-title.lose {
+  color: #ff3b30;
+  text-shadow: 0 0 10px rgba(255, 59, 48, 0.8);
+}
+
+.modal-title.win {
+  color: #00e1ff;
+  text-shadow: 0 0 10px rgba(0, 225, 255, 0.8);
+}
+
+.modal-desc {
+  font-size: 9px;
+  color: #a0aec0;
+  line-height: 1.6;
+  margin-bottom: 18px;
+}
+
+.modal-btn {
+  background: linear-gradient(180deg, #ffcc00 0%, #cc9900 100%);
+  border: 2px solid #ffe680;
+  border-radius: 10px;
+  color: #000;
+  font-size: 11px;
+  font-weight: bold;
+  padding: 10px 20px;
+  cursor: pointer;
+  box-shadow: 0 4px 0 #806000;
+  transition: all 0.1s ease;
+}
+
+.modal-btn:hover {
+  background: #ffe04d;
+}
+
+.modal-btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 #806000;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Mobile responsive media queries */
+@media (max-width: 600px) {
+  body {
+    padding: 6px 4px 16px;
+  }
+  
+  .game-logo {
+    max-height: 48px;
+    max-width: 200px;
+  }
+
+  .story-tag {
+    font-size: 8px;
+  }
+
+  .arcade-top-hud {
+    padding: 6px 10px;
+  }
+  
+  .hud-zone-tag {
+    font-size: 8px;
+  }
+  
+  .hud-btn {
+    padding: 4px 8px;
+    font-size: 8px;
+  }
+  
+  #mobile-controls {
+    padding: 8px 10px;
+  }
+  
+  .ctrl-btn {
+    width: 60px;
+    height: 54px;
+  }
+  
+  .jump-btn {
+    width: 90px;
+    height: 54px;
+  }
+  
+  .jump-btn .label {
+    font-size: 8px;
+  }
+}

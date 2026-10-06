@@ -194,6 +194,15 @@ export function CommandPalette({
 
       // Games
       {
+        id: "game-sonic",
+        title: "Sonic HTML5",
+        subtitle: "Classic Green Hill Zone sprint with mobile touch controls",
+        category: "Games",
+        icon: Gamepad2,
+        perform: () => navigate("/games/sonic"),
+        keywords: ["sonic", "hedgehog", "green hill", "platformer", "arcade", "mobile"],
+      },
+      {
         id: "game-8ball-pool",
         title: "8-Ball Pool",
         subtitle: "Classic HTML5 billiards with physics & AI",

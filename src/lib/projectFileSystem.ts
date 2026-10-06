@@ -228,14 +228,23 @@ export async function getAllProjectNodes(): Promise<ProjectNode[]> {
       .order("path", { ascending: true });
 
     if (!error && data && data.length > 0) {
-      saveLocalNodes(data);
-      return data;
+      // Merge local and remote nodes so locally saved folders are never lost
+      const mergedMap = new Map<string, ProjectNode>();
+      data.forEach((n) => mergedMap.set(n.path, n));
+      local.forEach((n) => {
+        if (!mergedMap.has(n.path)) {
+          mergedMap.set(n.path, n);
+        }
+      });
+      const merged = Array.from(mergedMap.values()).sort((a, b) => a.path.localeCompare(b.path));
+      saveLocalNodes(merged);
+      return merged;
     }
 
     // If remote table is empty, seed it with initial projects
     if (!error && (!data || data.length === 0)) {
       try {
-        await supabase.from("project_nodes").insert(INITIAL_SEED_NODES);
+        await supabase.from("project_nodes").insert(local.length > 0 ? local : INITIAL_SEED_NODES);
       } catch {
         // Non-fatal
       }
@@ -244,6 +253,22 @@ export async function getAllProjectNodes(): Promise<ProjectNode[]> {
   } catch {
     return local;
   }
+}
+
+function generateSafeUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      // Fallback below
+    }
+  }
+  // RFC4122 v4 compliant UUID generator
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 /**
@@ -266,7 +291,7 @@ export async function createProjectFolder(
 
   const now = new Date().toISOString();
   const newNode: ProjectNode = {
-    id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `folder_${Date.now()}`,
+    id: generateSafeUUID(),
     name: cleanName,
     path: fullPath,
     parent_path: normParent,
@@ -327,7 +352,7 @@ export async function createProjectFile({
 
   const now = new Date().toISOString();
   const newNode: ProjectNode = {
-    id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `file_${Date.now()}`,
+    id: generateSafeUUID(),
     name: cleanName,
     path: fullPath,
     parent_path: normParent,
@@ -393,7 +418,7 @@ export async function uploadProjectFile(
   const existing = local.find((n) => n.path === fullPath);
 
   const newNode: ProjectNode = {
-    id: existing ? existing.id : (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `file_${Date.now()}`),
+    id: existing ? existing.id : generateSafeUUID(),
     name: cleanName,
     path: fullPath,
     parent_path: normParent,

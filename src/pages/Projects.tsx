@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Folder,
@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Eye,
   Save,
+  Play,
 } from "lucide-react";
 import {
   getAllProjectNodes,
@@ -100,8 +101,22 @@ export function Projects({ isAdmin: propIsAdmin }: { isAdmin?: boolean }) {
 
   // Copy feedback
   const [copied, setCopied] = useState(false);
+  const navigate = useNavigate();
 
   const fileUploadInputRef = useRef<HTMLInputElement>(null);
+
+  const handleRunInPython = (file: ProjectNode) => {
+    sfxClick();
+    navigate("/apps/python", {
+      state: {
+        loadCode: file.content || "",
+        fileName: file.name,
+        autoRun: true,
+        projectNodeId: file.id,
+        projectPath: file.path,
+      },
+    });
+  };
 
   useEffect(() => {
     if (propIsAdmin !== undefined) {
@@ -512,6 +527,22 @@ export function Projects({ isAdmin: propIsAdmin }: { isAdmin?: boolean }) {
                   {/* Right Actions */}
                   <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                     {!isFolder && (
+                      node.name.endsWith(".py") ||
+                      node.name.endsWith(".pyw") ||
+                      node.mime_type === "text/x-python" ||
+                      Boolean(node.content && (node.content.includes("def ") || node.content.includes("print(") || node.content.includes("import ")))
+                    ) && (
+                      <button
+                        onClick={() => handleRunInPython(node)}
+                        className="btn bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-2.5 py-1 rounded-lg font-bold inline-flex items-center gap-1 shadow-xs transition-all hover:scale-105 active:scale-95"
+                        title="Run in Python Interpreter"
+                      >
+                        <Play className="w-3 h-3 fill-current" />
+                        <span>Run</span>
+                      </button>
+                    )}
+
+                    {!isFolder && (
                       <button
                         onClick={() => handleOpenFile(node)}
                         className="btn btn-secondary text-xs px-2.5 py-1 rounded-lg font-medium hidden sm:inline-flex items-center gap-1"
@@ -568,6 +599,22 @@ export function Projects({ isAdmin: propIsAdmin }: { isAdmin?: boolean }) {
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {(
+                    selectedFile.name.endsWith(".py") ||
+                    selectedFile.name.endsWith(".pyw") ||
+                    selectedFile.mime_type === "text/x-python" ||
+                    Boolean(selectedFile.content && (selectedFile.content.includes("def ") || selectedFile.content.includes("print(") || selectedFile.content.includes("import ")))
+                  ) && (
+                    <button
+                      onClick={() => handleRunInPython(selectedFile)}
+                      className="btn bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 shadow-sm transition-all hover:scale-105 active:scale-95"
+                      title="Run in Python Interpreter"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Run in Python</span>
+                    </button>
+                  )}
+
                   {isAdmin && !isEditingFile && (
                     <button
                       onClick={() => setIsEditingFile(true)}

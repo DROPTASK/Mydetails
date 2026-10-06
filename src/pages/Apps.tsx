@@ -15,7 +15,38 @@ export function Apps() {
           </h2>
         </div>
 
-        <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-3.5">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {/* Sonic HTML5 Card */}
+          <Link
+            to="/games/sonic"
+            onClick={sfxClick}
+            className="surface-elevated p-4 rounded-2xl border border-[var(--hairline)] hover:border-[var(--accent)]/40 hover:shadow-md transition-all flex flex-col justify-between group"
+          >
+            <div className="space-y-2">
+              <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center font-bold text-lg">
+                🦔
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-bold text-sm text-[var(--ink)] group-hover:text-[var(--accent)] transition-colors">
+                    Sonic HTML5
+                  </h3>
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                    Mobile &amp; PC
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--muted)] mt-1 line-clamp-2 leading-snug">
+                  Classic Green Hill Zone arcade sprint with on-screen mobile touch gamepad and 50 rings challenge.
+                </p>
+              </div>
+            </div>
+
+            <div className="pt-3 mt-2 border-t border-[var(--hairline)] flex items-center justify-between text-xs font-semibold text-[var(--accent)]">
+              <span>Play Now</span>
+              <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+            </div>
+          </Link>
+
           {/* Python Interpreter Card */}
           <Link
             to="/apps/python"

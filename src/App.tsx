@@ -23,6 +23,7 @@ const Chat = lazy(() => import("./pages/Chat").then((m) => ({ default: m.Chat })
 const Admin = lazy(() => import("./pages/Admin").then((m) => ({ default: m.Admin })));
 const Shortener = lazy(() => import("./pages/Shortener").then((m) => ({ default: m.Shortener })));
 const EightBallPool = lazy(() => import("./pages/games/EightBallPool").then((m) => ({ default: m.EightBallPool })));
+const SonicGame = lazy(() => import("./pages/games/SonicGame").then((m) => ({ default: m.SonicGame })));
 const PythonInterpreter = lazy(() => import("./pages/PythonInterpreter").then((m) => ({ default: m.PythonInterpreter })));
 const Projects = lazy(() => import("./pages/Projects").then((m) => ({ default: m.Projects })));
 
@@ -96,6 +97,8 @@ function AppRoutes() {
         <Route path="games" element={<Suspense fallback={<RouteFallback />}><Games /></Suspense>} />
         <Route path="games/8ball-pool" element={<Suspense fallback={<RouteFallback />}><EightBallPool /></Suspense>} />
         <Route path="games/pool" element={<Navigate to="/games/8ball-pool" replace />} />
+        <Route path="games/sonic" element={<Suspense fallback={<RouteFallback />}><SonicGame /></Suspense>} />
+        <Route path="games/sonic-html" element={<Navigate to="/games/sonic" replace />} />
         <Route path="games/bollywood" element={<Suspense fallback={<RouteFallback />}><Bollywood /></Suspense>} />
         <Route path="games/bollywood/solo" element={<Suspense fallback={<RouteFallback />}><BollywoodSolo /></Suspense>} />
         <Route path="games/bollywood/multiplayer" element={<Suspense fallback={<RouteFallback />}><Bollywood /></Suspense>} />
