@@ -1,0 +1,108 @@
+<html>
+<head>
+
+   <meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+   <meta content="utf-8" http-equiv="encoding">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, minimal-ui" />
+
+   <title>8-Ball Pool</title>
+
+   <style>
+      html, body {
+         background: #000000;
+         margin: 0;
+         padding: 0;
+         width: 100%;
+         height: 100%;
+         overflow: hidden;
+         touch-action: none;
+         user-select: none;
+      }
+      center {
+         width: 100%;
+         height: 100%;
+         margin: 0;
+         padding: 0;
+      }
+      #mygame {
+         width: 100%;
+         height: 100%;
+         display: flex;
+         align-items: center;
+         justify-content: center;
+      }
+      #mygame canvas {
+         display: block !important;
+         pointer-events: auto !important;
+         touch-action: none;
+      }
+      .fg-click2play, #fg-overlay, .fg-overlay, .fg-modal, [class*="privacy"], [class*="cookie"], .fg-app-overlay {
+         display: none !important;
+         pointer-events: none !important;
+         visibility: hidden !important;
+         opacity: 0 !important;
+      }
+   </style>
+
+   <script>
+      try {
+         localStorage.setItem("privacy_policy_accepted", "yes");
+         localStorage.setItem("famobi_terms_accepted", "yes");
+         localStorage.setItem("terms_accepted", "yes");
+         localStorage.setItem("gdpr_consent", "yes");
+         localStorage.setItem("cookie_consent", "yes");
+      } catch(e){}
+
+      // Continuous cleanup observer to ensure no click2play or privacy overlay blocks canvas
+      if (typeof MutationObserver !== "undefined") {
+         var observer = new MutationObserver(function(mutations) {
+            var overlays = document.querySelectorAll(".fg-click2play, #fg-overlay, .fg-overlay, [class*='privacy']");
+            for (var i = 0; i < overlays.length; i++) {
+               if (overlays[i] && overlays[i].parentNode) {
+                  overlays[i].parentNode.removeChild(overlays[i]);
+               }
+            }
+         });
+         document.addEventListener("DOMContentLoaded", function() {
+            observer.observe(document.body, { childList: true, subtree: true });
+         });
+      }
+
+      window.famobi_gameID = "8-ball-billiards-classic";
+      window.famobi_gameJS = [
+         "assets/src/01phaser.js",
+         "assets/src/02Ball.js",
+         "assets/src/03contactListener.js",
+         "assets/src/04billiardPhysics.js",
+         "assets/src/05levelData.js",
+         "assets/src/06maths.js",
+         "assets/src/07vector2d.js",
+         "assets/src/08render.js",
+         "assets/src/09sound.js",
+         "assets/src/10effects.js",
+         "assets/src/11timer.js",
+         "assets/src/12load.js",
+         "assets/src/13mainMenu.js",
+         "assets/src/14setup.js",
+         "assets/src/15gameController.js",
+         "assets/src/16boot.js",
+         function() {
+            
+         }
+      ];
+      (function (document, url, fgJS, firstJS) {
+        fgJS = document.createElement('script');
+        firstJS = document.getElementsByTagName('script')[0];
+        fgJS.src = url + encodeURIComponent(document.location.href);
+        firstJS.parentNode.insertBefore(fgJS, firstJS);
+      })(document, 'assets/js/gameapi/v1.js?e=');
+   </script>
+</head>
+
+<body>
+  <center>
+      <div id="mygame"></div>
+  </center>
+</body>
+
+</html>

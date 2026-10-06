@@ -34,6 +34,10 @@ export const RESERVED_APP_PATHS = new Set([
   "interests",
   "gallery",
   "links",
+  "projects",
+  "python",
+  "8ball-pool",
+  "pool",
   "misc",
   "miscellaneous",
   "chat",
@@ -436,7 +440,11 @@ export async function deleteShortLink(id: string, slug: string, assetId?: string
   // 2. Remove from Supabase
   if (isSupabaseConfigured) {
     try {
-      await supabase.from("short_links").delete().eq("id", id);
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (uuidRegex.test(id)) {
+        await supabase.from("short_links").delete().eq("id", id);
+      }
+      await supabase.from("short_links").delete().eq("slug", slug);
       if (assetId) {
         await supabase.from("portfolio_assets").delete().eq("id", assetId);
       }

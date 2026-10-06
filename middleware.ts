@@ -7,7 +7,7 @@ export const config = {
 const RESERVED = new Set([
   "", "about", "apps", "movies", "games", "bollywood", "solo", "multiplayer",
   "room", "tic-tac-toe", "rock-paper-scissors", "interests", "gallery",
-  "links", "misc", "miscellaneous", "chat", "admin", "shortener", "api",
+  "links", "projects", "python", "8ball-pool", "pool", "misc", "miscellaneous", "chat", "admin", "shortener", "api",
   "login", "signup", "auth", "dashboard", "settings", "status", "profile",
   "playlist", "feed", "rss",
 ]);

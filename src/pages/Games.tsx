@@ -8,6 +8,14 @@ import { sfxClick } from "../lib/sound";
 
 const PLAY_ITEMS = [
   {
+    to: "/games/8ball-pool",
+    label: "8-Ball Pool",
+    desc: "Realistic billiards simulation with physics, cue spin controls, vs AI and 2-Player mode",
+    icon: Gamepad2,
+    emoji: "🎱",
+    badge: "vs AI & 2-Player",
+  },
+  {
     to: "/games/bollywood",
     label: "Cinema Movie Quiz",
     desc: "Guess films across Bollywood, Hollywood, Tollywood, & Kollywood. Solo puzzle or live multiplayer with stream chat!",

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Lock, Image as ImageIcon, Trash2, Plus, LogOut, Wifi, WifiOff, Music, Clapperboard,
-  Search, Star, MessageSquare, Send, ArrowLeft, Mail, Bell, UserCircle2, Upload, Check, Film, Link2,
+  Search, Star, MessageSquare, Send, ArrowLeft, Mail, Bell, UserCircle2, Upload, Check, Film, Link2, HardDrive,
 } from "lucide-react";
 import { supabase, type Message, type PortfolioAsset, type FavoriteMovie, type ChatUser, type SiteProfile, type BollywoodMovieRecord } from "../lib/supabase";
 import type { PlaylistTrack } from "../lib/musicStore";
@@ -12,6 +12,7 @@ import { uploadToPortfolioBucket } from "../lib/storage";
 import { sfxToggle } from "../lib/sound";
 import { cn } from "../lib/utils";
 import { Shortener } from "./Shortener";
+import { Projects } from "./Projects";
 import { isAdminSession, setAdminSession } from "../lib/adminAuth";
 
 const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || "";
@@ -37,6 +38,7 @@ const DEFAULT_PROFILE: SiteProfile = {
 const TABS = [
   { id: "chats" as const, label: "Chats", icon: MessageSquare },
   { id: "profile" as const, label: "Profile", icon: UserCircle2 },
+  { id: "projects" as const, label: "Projects", icon: HardDrive },
   { id: "assets" as const, label: "Content", icon: ImageIcon },
   { id: "shortlinks" as const, label: "Short Links", icon: Link2 },
   { id: "playlist" as const, label: "Playlist", icon: Music },
@@ -710,6 +712,12 @@ export function Admin() {
                 <button onClick={() => deleteAsset(a.id)} className="icon-btn" style={{ width: 32, height: 32 }}><Trash2 className="w-4 h-4" /></button>
               </div>
             ))}
+          </div>
+        )}
+
+        {tab === "projects" && (
+          <div className="space-y-4">
+            <Projects isAdmin={true} />
           </div>
         )}
 

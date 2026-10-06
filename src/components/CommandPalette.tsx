@@ -24,6 +24,8 @@ import {
   Shield,
   ExternalLink,
   Command,
+  HardDrive,
+  Terminal,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { useMusic } from "../lib/musicStore";
@@ -145,6 +147,24 @@ export function CommandPalette({
         keywords: ["photos", "shots", "setup"],
       },
       {
+        id: "nav-projects",
+        title: "Projects & Filesystem",
+        subtitle: "Computer path explorer, code files, and uploads",
+        category: "Pages",
+        icon: HardDrive,
+        perform: () => navigate("/projects"),
+        keywords: ["projects", "files", "folder", "code", "directory", "upload"],
+      },
+      {
+        id: "nav-python",
+        title: "Python Interpreter",
+        subtitle: "In-browser WebAssembly CPython runner & REPL",
+        category: "Pages",
+        icon: Terminal,
+        perform: () => navigate("/apps/python"),
+        keywords: ["python", "code", "ide", "repl", "interpreter", "run"],
+      },
+      {
         id: "nav-links",
         title: "Links & Resources",
         subtitle: "Socials, repositories & shortcuts",
@@ -173,6 +193,15 @@ export function CommandPalette({
       },
 
       // Games
+      {
+        id: "game-8ball-pool",
+        title: "8-Ball Pool",
+        subtitle: "Classic HTML5 billiards with physics & AI",
+        category: "Games",
+        icon: Gamepad2,
+        perform: () => navigate("/games/8ball-pool"),
+        keywords: ["pool", "billiards", "8ball", "snooker", "cue"],
+      },
       {
         id: "game-bollywood-solo",
         title: "Bollywood — Solo",

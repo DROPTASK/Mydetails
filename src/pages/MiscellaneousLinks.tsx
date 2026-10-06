@@ -38,6 +38,7 @@ export function MiscellaneousLinks({
   const [searchQuery, setSearchQuery] = useState("");
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
   const [qrModalLink, setQrModalLink] = useState<ShortLink | null>(null);
+  const [linkToDelete, setLinkToDelete] = useState<ShortLink | null>(null);
   const [sortBy, setSortBy] = useState<"clicks" | "newest" | "name">("clicks");
   const isAdmin = isAdminSession();
 
@@ -66,11 +67,9 @@ export function MiscellaneousLinks({
     }, 2000);
   };
 
-  const handleDelete = async (link: ShortLink) => {
-    if (!confirm(`Delete short link ${DOMAIN_NAME}/${link.slug}?`)) return;
+  const handleDelete = (link: ShortLink) => {
     sfxClick();
-    await deleteShortLink(link.id, link.slug, link.asset_id);
-    setLinks((prev) => prev.filter((l) => l.id !== link.id));
+    setLinkToDelete(link);
   };
 
   const filteredLinks = links
@@ -414,6 +413,50 @@ export function MiscellaneousLinks({
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>Open Link</span>
                 </a>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {linkToDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="surface-elevated rounded-3xl p-6 max-w-sm w-full border border-[var(--hairline)] shadow-2xl space-y-4 text-center"
+            >
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-500 mx-auto flex items-center justify-center">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-base text-[var(--ink)]">Delete Short Link?</h3>
+                <p className="text-xs text-[var(--muted)] leading-relaxed">
+                  Are you sure you want to delete <strong className="text-[var(--ink)] font-mono">{DOMAIN_NAME}/{linkToDelete.slug}</strong>?
+                </p>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setLinkToDelete(null)}
+                  className="btn btn-secondary flex-1 py-2 rounded-xl text-xs font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    sfxClick();
+                    const target = linkToDelete;
+                    setLinkToDelete(null);
+                    await deleteShortLink(target.id, target.slug, target.asset_id);
+                    setLinks((prev) => prev.filter((l) => l.id !== target.id && l.slug !== target.slug));
+                    sfxSuccess();
+                  }}
+                  className="btn bg-rose-500 hover:bg-rose-600 text-white flex-1 py-2 rounded-xl text-xs font-bold shadow-xs"
+                >
+                  Delete Now
+                </button>
               </div>
             </motion.div>
           </div>

@@ -22,6 +22,9 @@ const RockPaperScissors = lazy(() => import("./pages/games/RockPaperScissors").t
 const Chat = lazy(() => import("./pages/Chat").then((m) => ({ default: m.Chat })));
 const Admin = lazy(() => import("./pages/Admin").then((m) => ({ default: m.Admin })));
 const Shortener = lazy(() => import("./pages/Shortener").then((m) => ({ default: m.Shortener })));
+const EightBallPool = lazy(() => import("./pages/games/EightBallPool").then((m) => ({ default: m.EightBallPool })));
+const PythonInterpreter = lazy(() => import("./pages/PythonInterpreter").then((m) => ({ default: m.PythonInterpreter })));
+const Projects = lazy(() => import("./pages/Projects").then((m) => ({ default: m.Projects })));
 
 function getHostname() {
   try {
@@ -85,9 +88,14 @@ function AppRoutes() {
       >
         <Route index element={<Home />} />
         <Route path="about" element={<Suspense fallback={<RouteFallback />}><About /></Suspense>} />
+        <Route path="projects" element={<Suspense fallback={<RouteFallback />}><Projects /></Suspense>} />
         <Route path="apps" element={<Suspense fallback={<RouteFallback />}><Apps /></Suspense>} />
+        <Route path="apps/python" element={<Suspense fallback={<RouteFallback />}><PythonInterpreter /></Suspense>} />
+        <Route path="python" element={<Navigate to="/apps/python" replace />} />
         <Route path="movies" element={<Suspense fallback={<RouteFallback />}><Movies /></Suspense>} />
         <Route path="games" element={<Suspense fallback={<RouteFallback />}><Games /></Suspense>} />
+        <Route path="games/8ball-pool" element={<Suspense fallback={<RouteFallback />}><EightBallPool /></Suspense>} />
+        <Route path="games/pool" element={<Navigate to="/games/8ball-pool" replace />} />
         <Route path="games/bollywood" element={<Suspense fallback={<RouteFallback />}><Bollywood /></Suspense>} />
         <Route path="games/bollywood/solo" element={<Suspense fallback={<RouteFallback />}><BollywoodSolo /></Suspense>} />
         <Route path="games/bollywood/multiplayer" element={<Suspense fallback={<RouteFallback />}><Bollywood /></Suspense>} />
