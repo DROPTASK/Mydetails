@@ -356,10 +356,36 @@ export function PythonInterpreter() {
       py.globals.set("__user_filename__", title);
 
       const runnerCode = `
-import sys as _sys, io as _io, traceback as _traceback, builtins as _builtins, json as _json
+import sys as _sys, io as _io, traceback as _traceback, builtins as _builtins, json as _json, gc as _gc
 
-_out = _io.StringIO()
-_err = _io.StringIO()
+# 1. Enforce safe recursion limit to prevent WASM call stack overflow
+_sys.setrecursionlimit(500)
+
+# 2. Reclaim memory before execution
+_gc.collect()
+
+# 3. Memory-capped output buffer (prevents OOM from large or infinite print loops)
+class _CappedStringIO(_io.StringIO):
+    def __init__(self, max_chars=80000):
+        super().__init__()
+        self._max = max_chars
+        self._truncated = False
+
+    def write(self, s):
+        if self._truncated:
+            return len(s)
+        curr_len = self.tell()
+        if curr_len + len(s) > self._max:
+            allowed = max(0, self._max - curr_len)
+            if allowed > 0:
+                super().write(s[:allowed])
+            super().write("\\n⚠️ [Output truncated: 80KB limit reached to prevent memory exhaustion]\\n")
+            self._truncated = True
+            return len(s)
+        return super().write(s)
+
+_out = _CappedStringIO()
+_err = _CappedStringIO()
 _old_out = _sys.stdout
 _old_err = _sys.stderr
 _old_in = _sys.stdin
@@ -384,9 +410,16 @@ def _safe_input_runner(prompt=""):
 
 _orig_input = _builtins.input
 _builtins.input = _safe_input_runner
-_idle_env["input"] = _safe_input_runner
-_idle_env["__builtins__"] = _builtins
-_idle_env["__file__"] = __user_filename__
+
+# 4. Clean module restart: reset _idle_env for the new module execution to prevent memory accumulation
+_idle_env.clear()
+_idle_env.update({
+    "__name__": "__main__",
+    "__doc__": None,
+    "__builtins__": _builtins,
+    "__file__": __user_filename__,
+    "input": _safe_input_runner,
+})
 
 _has_error = False
 
@@ -395,6 +428,13 @@ try:
     exec(_compiled, _idle_env)
 except SystemExit:
     pass
+except MemoryError:
+    _has_error = True
+    _err.write("MemoryError: Python memory limit exceeded. Try reducing array sizes or loop depth.\\n")
+    _gc.collect()
+except RecursionError:
+    _has_error = True
+    _err.write("RecursionError: Maximum recursion depth (500) exceeded.\\n")
 except BaseException:
     _has_error = True
     _traceback.print_exc(file=_err)
@@ -404,6 +444,7 @@ finally:
     _sys.stdin = _old_in
     _builtins.input = _orig_input
     _idle_env["input"] = _safe_input_runner
+    _gc.collect()
 
 _json.dumps({
     "out": _out.getvalue(),
@@ -442,15 +483,53 @@ _json.dumps({
       sfxSuccess();
     } catch (err: any) {
       const errStr = String(err);
-      setHistory((prev) => [
-        ...prev,
-        {
-          id: `run_err_${Date.now()}`,
-          type: "run",
-          title,
-          error: `Traceback (most recent call last):\n${err instanceof Error ? err.message : errStr}`,
-        },
-      ]);
+      const isMemErr =
+        errStr.includes("out of memory") ||
+        errStr.includes("MemoryError") ||
+        errStr.includes("memory access out of bounds") ||
+        errStr.includes("call stack size exceeded");
+
+      if (isMemErr) {
+        // Recycle the Pyodide instance to cleanly restore WASM memory
+        pyodideRef.current = null;
+        globalPyodidePromise = null;
+        setPyodideReady(false);
+        setPyodideLoading(true);
+
+        setHistory((prev) => [
+          ...prev,
+          {
+            id: `run_err_${Date.now()}`,
+            type: "run",
+            title,
+            error:
+              "⚠️ Memory Limit Exceeded: WebAssembly heap was exhausted during execution.\n" +
+              "The Python execution engine has been automatically recycled to free memory for your next run.\n\n" +
+              "Traceback (most recent call last):\nMemoryError: Out of memory",
+          },
+        ]);
+
+        // Re-initialize a clean Pyodide engine in background
+        loadPyodideEngine()
+          .then((py) => {
+            pyodideRef.current = py;
+            setPyodideReady(true);
+            setPyodideLoading(false);
+          })
+          .catch(() => {
+            setPyodideLoading(false);
+          });
+      } else {
+        setHistory((prev) => [
+          ...prev,
+          {
+            id: `run_err_${Date.now()}`,
+            type: "run",
+            title,
+            error: `Traceback (most recent call last):\n${err instanceof Error ? err.message : errStr}`,
+          },
+        ]);
+      }
     } finally {
       setIsRunning(false);
       setTimeout(() => {
@@ -485,10 +564,29 @@ _json.dumps({
       py.globals.set("__repl_cmd__", cmd);
 
       const replScript = `
-import sys as _sys, io as _io, traceback as _traceback, builtins as _builtins, json as _json
+import sys as _sys, io as _io, traceback as _traceback, builtins as _builtins, json as _json, gc as _gc
 
-_out = _io.StringIO()
-_err = _io.StringIO()
+class _CappedReplStringIO(_io.StringIO):
+    def __init__(self, max_chars=40000):
+        super().__init__()
+        self._max = max_chars
+        self._truncated = False
+
+    def write(self, s):
+        if self._truncated:
+            return len(s)
+        curr_len = self.tell()
+        if curr_len + len(s) > self._max:
+            allowed = max(0, self._max - curr_len)
+            if allowed > 0:
+                super().write(s[:allowed])
+            super().write("\\n⚠️ [Output truncated to prevent memory exhaustion]\\n")
+            self._truncated = True
+            return len(s)
+        return super().write(s)
+
+_out = _CappedReplStringIO()
+_err = _CappedReplStringIO()
 _old_out = _sys.stdout
 _old_err = _sys.stderr
 _old_in = _sys.stdin
@@ -528,6 +626,10 @@ try:
     except SyntaxError:
         _compiled = compile(__repl_cmd__, "<stdin>", "exec")
         exec(_compiled, _idle_env)
+except MemoryError:
+    _is_err = True
+    _err.write("MemoryError: Python memory limit exceeded.\\n")
+    _gc.collect()
 except BaseException:
     _is_err = True
     _traceback.print_exc(file=_err)
@@ -537,6 +639,7 @@ finally:
     _sys.stdin = _old_in
     _builtins.input = _orig_input
     _idle_env["input"] = _safe_input_repl
+    _gc.collect()
 
 _json.dumps({
     "out": _out.getvalue(),
@@ -580,13 +683,35 @@ _json.dumps({
         },
       ]);
     } catch (err: any) {
+      const errStr = String(err);
+      const isMemErr =
+        errStr.includes("out of memory") ||
+        errStr.includes("MemoryError") ||
+        errStr.includes("memory access out of bounds");
+
+      if (isMemErr) {
+        pyodideRef.current = null;
+        globalPyodidePromise = null;
+        setPyodideReady(false);
+        setPyodideLoading(true);
+        loadPyodideEngine()
+          .then((py) => {
+            pyodideRef.current = py;
+            setPyodideReady(true);
+            setPyodideLoading(false);
+          })
+          .catch(() => setPyodideLoading(false));
+      }
+
       setHistory((prev) => [
         ...prev,
         {
           id: `cmd_err_${Date.now()}`,
           type: "cmd",
           cmd,
-          error: String(err instanceof Error ? err.message : err),
+          error: isMemErr
+            ? "⚠️ Memory Limit Exceeded. Python engine automatically recycled."
+            : String(err instanceof Error ? err.message : err),
         },
       ]);
     } finally {
