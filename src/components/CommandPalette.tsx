@@ -147,6 +147,15 @@ export function CommandPalette({
         keywords: ["photos", "shots", "setup"],
       },
       {
+        id: "nav-strategy",
+        title: "Strategy Builder (12th)",
+        subtitle: "Datewise chapter study planner, CBSE syllabus, holidays & backlog calculator",
+        category: "Pages",
+        icon: LayoutGrid,
+        perform: () => navigate("/apps/strategy-builder"),
+        keywords: ["strategy", "builder", "cbse", "12th", "board", "syllabus", "planner", "backlog", "holiday", "study"],
+      },
+      {
         id: "nav-projects",
         title: "Projects & Filesystem",
         subtitle: "Computer path explorer, code files, and uploads",

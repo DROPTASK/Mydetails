@@ -15,34 +15,39 @@ export function Apps() {
           </h2>
         </div>
 
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-          {/* Sonic HTML5 Card */}
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          {/* Strategy Builder (12th) Card */}
           <Link
-            to="/games/sonic"
+            to="/apps/strategy-builder"
             onClick={sfxClick}
-            className="surface-elevated p-4 rounded-2xl border border-[var(--hairline)] hover:border-[var(--accent)]/40 hover:shadow-md transition-all flex flex-col justify-between group"
+            className="surface-elevated p-4 rounded-2xl border-2 border-[var(--accent)]/50 hover:border-[var(--accent)] hover:shadow-lg transition-all flex flex-col justify-between group relative overflow-hidden bg-gradient-to-br from-indigo-500/[0.04] to-purple-500/[0.04]"
           >
             <div className="space-y-2">
-              <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center font-bold text-lg">
-                🦔
+              <div className="flex items-center justify-between">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-500 flex items-center justify-center font-bold text-lg">
+                  🎯
+                </div>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-[var(--accent)] text-white shadow-sm">
+                  12th Board Strategy
+                </span>
               </div>
               <div>
                 <div className="flex items-center justify-between">
                   <h3 className="font-bold text-sm text-[var(--ink)] group-hover:text-[var(--accent)] transition-colors">
-                    Sonic HTML5
+                    Strategy Builder (12th)
                   </h3>
                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-blue-500/10 text-blue-600 dark:text-blue-400">
-                    Mobile &amp; PC
+                    CBSE 2025-26
                   </span>
                 </div>
                 <p className="text-xs text-[var(--muted)] mt-1 line-clamp-2 leading-snug">
-                  Classic Green Hill Zone arcade sprint with on-screen mobile touch gamepad and 50 rings challenge.
+                  Datewise chapter studying play, school attendance, holidays &amp; self-leave tracker, syllabus PDFs, and dynamic backlog recalculator.
                 </p>
               </div>
             </div>
 
             <div className="pt-3 mt-2 border-t border-[var(--hairline)] flex items-center justify-between text-xs font-semibold text-[var(--accent)]">
-              <span>Play Now</span>
+              <span>Open Study Planner</span>
               <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
             </div>
           </Link>

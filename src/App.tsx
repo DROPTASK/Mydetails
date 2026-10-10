@@ -26,6 +26,7 @@ const EightBallPool = lazy(() => import("./pages/games/EightBallPool").then((m) 
 const SonicGame = lazy(() => import("./pages/games/SonicGame").then((m) => ({ default: m.SonicGame })));
 const PythonInterpreter = lazy(() => import("./pages/PythonInterpreter").then((m) => ({ default: m.PythonInterpreter })));
 const Projects = lazy(() => import("./pages/Projects").then((m) => ({ default: m.Projects })));
+const StrategyBuilder = lazy(() => import("./pages/StrategyBuilder").then((m) => ({ default: m.StrategyBuilder })));
 
 function getHostname() {
   try {
@@ -91,6 +92,9 @@ function AppRoutes() {
         <Route path="about" element={<Suspense fallback={<RouteFallback />}><About /></Suspense>} />
         <Route path="projects" element={<Suspense fallback={<RouteFallback />}><Projects /></Suspense>} />
         <Route path="apps" element={<Suspense fallback={<RouteFallback />}><Apps /></Suspense>} />
+        <Route path="apps/strategy-builder" element={<Suspense fallback={<RouteFallback />}><StrategyBuilder /></Suspense>} />
+        <Route path="apps/strategy" element={<Navigate to="/apps/strategy-builder" replace />} />
+        <Route path="strategy" element={<Navigate to="/apps/strategy-builder" replace />} />
         <Route path="apps/python" element={<Suspense fallback={<RouteFallback />}><PythonInterpreter /></Suspense>} />
         <Route path="python" element={<Navigate to="/apps/python" replace />} />
         <Route path="movies" element={<Suspense fallback={<RouteFallback />}><Movies /></Suspense>} />

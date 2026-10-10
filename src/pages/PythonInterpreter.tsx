@@ -444,6 +444,10 @@ finally:
     _sys.stdin = _old_in
     _builtins.input = _orig_input
     _idle_env["input"] = _safe_input_runner
+    if "__user_source__" in globals():
+        del globals()["__user_source__"]
+    if "__user_filename__" in globals():
+        del globals()["__user_filename__"]
     _gc.collect()
 
 _json.dumps({
@@ -454,6 +458,14 @@ _json.dumps({
 `;
 
       const rawJson = await py.runPythonAsync(runnerCode);
+
+      try {
+        py.globals.delete("__user_source__");
+        py.globals.delete("__user_filename__");
+      } catch {
+        // ignore
+      }
+
       let capturedOut = "";
       let capturedErr = "";
       let hasError = false;
@@ -487,6 +499,12 @@ _json.dumps({
         errStr.includes("out of memory") ||
         errStr.includes("MemoryError") ||
         errStr.includes("memory access out of bounds") ||
+        errStr.includes("Cannot enlarge memory arrays") ||
+        errStr.includes("detached ArrayBuffer") ||
+        errStr.includes("could not allocate memory") ||
+        errStr.includes("reading 'memory'") ||
+        errStr.includes("module memory") ||
+        errStr.includes("Module.HEAP") ||
         errStr.includes("call stack size exceeded");
 
       if (isMemErr) {
@@ -639,6 +657,8 @@ finally:
     _sys.stdin = _old_in
     _builtins.input = _orig_input
     _idle_env["input"] = _safe_input_repl
+    if "__repl_cmd__" in globals():
+        del globals()["__repl_cmd__"]
     _gc.collect()
 
 _json.dumps({
@@ -650,6 +670,13 @@ _json.dumps({
 `;
 
       const rawJson = await py.runPythonAsync(replScript);
+
+      try {
+        py.globals.delete("__repl_cmd__");
+      } catch {
+        // ignore
+      }
+
       let outText = "";
       let resText = "";
       let errText = "";
@@ -687,7 +714,13 @@ _json.dumps({
       const isMemErr =
         errStr.includes("out of memory") ||
         errStr.includes("MemoryError") ||
-        errStr.includes("memory access out of bounds");
+        errStr.includes("memory access out of bounds") ||
+        errStr.includes("Cannot enlarge memory arrays") ||
+        errStr.includes("detached ArrayBuffer") ||
+        errStr.includes("could not allocate memory") ||
+        errStr.includes("reading 'memory'") ||
+        errStr.includes("module memory") ||
+        errStr.includes("Module.HEAP");
 
       if (isMemErr) {
         pyodideRef.current = null;
@@ -783,6 +816,9 @@ _idle_env = {
     "__builtins__": _builtins,
     "input": _safe_input_reset,
 }
+
+import gc as _gc
+_gc.collect()
 `);
       }
       setHistory([
@@ -790,7 +826,32 @@ _idle_env = {
           id: `restart_${Date.now()}`,
           type: "system",
           title: "Session Restarted",
-          output: "Memory and globals have been reset. Ready for interactive execution.",
+          output: "Memory and globals have been reset. Garbage collection executed.",
+        },
+      ]);
+      sfxSuccess();
+    } catch {
+      // Ignore
+    }
+  };
+
+  // Garbage collect memory without resetting variables
+  const handleFreeMemory = async () => {
+    sfxClick();
+    try {
+      if (pyodideRef.current) {
+        await pyodideRef.current.runPythonAsync(`
+import gc as _gc
+_gc.collect()
+`);
+      }
+      setHistory((prev) => [
+        ...prev,
+        {
+          id: `gc_${Date.now()}`,
+          type: "system",
+          title: "Memory Reclaimed",
+          output: "Garbage collection completed. Unreferenced WebAssembly objects freed.",
         },
       ]);
       sfxSuccess();
@@ -1403,6 +1464,14 @@ _idle_env = {
                 </div>
 
                 <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={handleFreeMemory}
+                    className="text-xs text-[var(--muted)] hover:text-emerald-500 transition-colors px-2 py-1 rounded flex items-center gap-1"
+                    title="Garbage Collect & Free Unused Python WASM Memory"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Free Memory</span>
+                  </button>
                   <button
                     onClick={handleRestartSession}
                     className="text-xs text-[var(--muted)] hover:text-[var(--ink)] transition-colors px-2 py-1 rounded flex items-center gap-1"
