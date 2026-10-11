@@ -778,6 +778,17 @@ export interface BacklogAnalysis {
   totalSelfLeaves: number;
   totalWorkingDays: number;
   totalStudyDays: number;
+  // Real-date synced metrics (From Today onwards)
+  todayDate: string;
+  isTodayWithinPlan: boolean;
+  remainingDaysFromToday: number;
+  remainingWorkingDaysFromToday: number;
+  remainingHolidaysFromToday: number;
+  remainingSelfLeavesFromToday: number;
+  remainingTasksFromToday: number;
+  pastWorkingDays: number;
+  pastHolidays: number;
+  pastSelfLeaves: number;
 }
 
 export function analyzePlanBacklog(plan: StrategyPlan): BacklogAnalysis {
@@ -790,21 +801,53 @@ export function analyzePlanBacklog(plan: StrategyPlan): BacklogAnalysis {
   let totalSelfLeaves = 0;
   let totalWorkingDays = 0;
 
+  // Synced by real date (from today onwards)
+  let remainingWorkingDaysFromToday = 0;
+  let remainingHolidaysFromToday = 0;
+  let remainingSelfLeavesFromToday = 0;
+  let remainingTasksFromToday = 0;
+  let remainingDaysFromToday = 0;
+
+  let pastWorkingDays = 0;
+  let pastHolidays = 0;
+  let pastSelfLeaves = 0;
+
   // Track dates that have uncompleted tasks that were scheduled prior to today
   const overdueDates = new Set<string>();
 
   for (const day of plan.days) {
-    if (day.dayType === "holiday") totalHolidays++;
-    else if (day.dayType === "self_leave") totalSelfLeaves++;
-    else totalWorkingDays++;
+    const isPast = day.date < today;
+    const isFromToday = day.date >= today;
+
+    if (day.dayType === "holiday") {
+      totalHolidays++;
+      if (isPast) pastHolidays++;
+      else remainingHolidaysFromToday++;
+    } else if (day.dayType === "self_leave") {
+      totalSelfLeaves++;
+      if (isPast) pastSelfLeaves++;
+      else remainingSelfLeavesFromToday++;
+    } else {
+      totalWorkingDays++;
+      if (isPast) pastWorkingDays++;
+      else remainingWorkingDaysFromToday++;
+    }
+
+    if (isFromToday) {
+      remainingDaysFromToday++;
+    }
 
     for (const task of day.tasks) {
       totalTasksCount++;
       if (task.completed) {
         completedTasksCount++;
-      } else if (day.date < today) {
+      } else if (isPast) {
         backlogTasksCount++;
         overdueDates.add(day.date);
+      }
+
+      if (isFromToday && !task.completed) {
+        remainingTasksFromToday++;
       }
     }
   }
@@ -817,6 +860,8 @@ export function analyzePlanBacklog(plan: StrategyPlan): BacklogAnalysis {
   const adjustedEndDate = addDaysToDate(originalEndDate, backlogDays);
 
   const completionRatePercent = totalTasksCount > 0 ? Math.round((completedTasksCount / totalTasksCount) * 100) : 0;
+
+  const isTodayWithinPlan = plan.days.some((d) => d.date === today);
 
   return {
     backlogTasksCount,
@@ -831,6 +876,16 @@ export function analyzePlanBacklog(plan: StrategyPlan): BacklogAnalysis {
     totalSelfLeaves,
     totalWorkingDays,
     totalStudyDays: plan.days.length,
+    todayDate: today,
+    isTodayWithinPlan,
+    remainingDaysFromToday,
+    remainingWorkingDaysFromToday,
+    remainingHolidaysFromToday,
+    remainingSelfLeavesFromToday,
+    remainingTasksFromToday,
+    pastWorkingDays,
+    pastHolidays,
+    pastSelfLeaves,
   };
 }
 
@@ -1122,3 +1177,161 @@ export function decodePlanFromShareString(shareStr: string): StrategyPlan | null
     return null;
   }
 }
+
+/**
+ * Generate a complete AI Prompt with schema instructions and student custom goal.
+ * This can be copied and given to ChatGPT, Claude, Gemini, etc. to output a 100% compatible JSON plan.
+ */
+export function generateAiStrategyPrompt(options: {
+  userGoal: string;
+  studentName?: string;
+  startDate?: string;
+  targetEndDate?: string;
+  durationDays?: number;
+  selectedSubjects?: string[];
+  weakSubjects?: string;
+  dailySchoolHours?: number;
+  includeCurrentPlanJson?: boolean;
+  currentPlan?: StrategyPlan;
+}): string {
+  const student = options.studentName || "Class 12th Board Student";
+  const start = options.startDate || getTodayIso();
+  const dur = options.durationDays || 60;
+  const end = options.targetEndDate || addDaysToDate(start, dur - 1);
+  const selectedIds = options.selectedSubjects && options.selectedSubjects.length > 0
+    ? options.selectedSubjects
+    : ["physics", "chemistry", "mathematics", "cs", "english"];
+
+  // Filter actual subjects matching selection
+  const activeSubjects = CBSE_12TH_SUBJECTS.filter((s) => selectedIds.includes(s.id));
+  const activeSubjectList = activeSubjects.length > 0 ? activeSubjects : CBSE_12TH_SUBJECTS;
+
+  // Build exact catalog of every chapter name, code, weightage marks, unit, and topics
+  let syllabusCatalog = "";
+  for (const sub of activeSubjectList) {
+    syllabusCatalog += `\n### SUBJECT: ${sub.name.toUpperCase()} (Code ${sub.code}, Total Theory: ${sub.totalTheoryMarks} marks)\n`;
+    for (const [idx, ch] of sub.chapters.entries()) {
+      syllabusCatalog += `  ${idx + 1}. [ID: "${ch.id}"] "${ch.name}" (Unit: ${ch.unit}, Weightage: ~${ch.weightageMarks} marks, Difficulty: ${ch.difficulty})\n`;
+      if (ch.topics && ch.topics.length > 0) {
+        syllabusCatalog += `     Key Topics: ${ch.topics.join(" | ")}\n`;
+      }
+    }
+  }
+
+  const jsonSchemaExample = {
+    title: "Mission 95%+ Board Strategy (Generated by AI)",
+    studentName: student,
+    stream: "CBSE Class 12 (Science / PCM+CS / PCB)",
+    startDate: start,
+    targetEndDate: end,
+    selectedSubjectIds: selectedIds,
+    days: [
+      {
+        date: start,
+        dayType: "working", // "working" (school day ~5h), "holiday" (Sunday/Gazetted ~10h), or "self_leave" (bunk for self study ~8.5h)
+        label: "Orientation & Mechanics Kickoff",
+        targetStudyHours: 5,
+        tasks: [
+          {
+            id: `task_${start}_0`,
+            subjectId: "physics", // "physics" | "chemistry" | "mathematics" | "cs" | "english" | "biology"
+            chapterId: "phy-1",
+            chapterName: "Electric Charges and Fields",
+            subjectName: "Physics",
+            taskType: "Theory", // "Theory" | "NCERT Exercises" | "PYQs" | "Revision" | "Sample Paper"
+            estHours: 3,
+            completed: false,
+            notes: "Focus on Gauss Law & Electric Dipole derivations"
+          }
+        ]
+      }
+    ]
+  };
+
+  let prompt = `You are an elite CBSE Class 12 Board Examination Strategy Architect and Academic Mentor.
+Your task is to generate a personalized, realistic, high-scoring Datewise Chapter Study Strategy for Class 12th Board examinations.
+
+CRITICAL REQUIREMENT:
+The web app includes a built-in JSON Importer ("Copy Shared Plan" -> Paste JSON or share string).
+You must output a strictly valid, JSON-formatted study plan adhering EXACTLY to the application's schema below, wrapped in a single \`\`\`json code block. Do NOT include markdown outside or syntax errors.
+
+=======================================================
+STUDENT PROFILE & CUSTOM REQUIREMENTS:
+=======================================================
+• Student Name: ${student}
+• Strategy Start Date: ${start} (YYYY-MM-DD)
+• Target Completion Date: ${end} (YYYY-MM-DD) (~${dur} total study days)
+• Target Subjects: ${activeSubjectList.map((s) => s.name).join(", ")}
+• Weak Areas / High Priority Focus: ${options.weakSubjects || "Focus extra time on high-weightage chapters and past 10-year board questions"}
+• Specific User Request / Goals:
+"${options.userGoal.trim() || "Create an intensive 95%+ board preparation timetable covering all chapters, NCERT exercises, and PYQs."}"
+
+=======================================================
+EXACT CBSE CLASS 12 SYLLABUS & CHAPTER LIST:
+(Use these exact chapter names, IDs, and subject IDs in your generated tasks)
+=======================================================
+${syllabusCatalog.trim()}
+
+=======================================================
+ATTENDANCE & DAY-TYPE RULES:
+=======================================================
+1. Every day in the "days" array MUST have "date" in ISO format (YYYY-MM-DD) sequential from ${start} to ${end}.
+2. "dayType" must be one of:
+   - "working" (School working day: schedule 1 to 2 chapters, targetStudyHours: 4 to 5)
+   - "holiday" (Sunday or Gazetted holiday: high-output day, 2 to 3 chapters, targetStudyHours: 9 to 11)
+   - "self_leave" (Strategic school bunk / preparatory leave for revision: 2 to 3 chapters, targetStudyHours: 8 to 9)
+3. Sundays should automatically have dayType: "holiday".
+4. "tasks": Array of chapter tasks for that specific date. Each task MUST contain exact values:
+   - id: unique string (e.g. "task_2026-10-12_0")
+   - subjectId: "physics" | "chemistry" | "mathematics" | "cs" | "english" | "biology"
+   - chapterId: exact chapter ID from the catalog above (e.g. "phy-1", "chem-2", "math-7")
+   - chapterName: exact chapter name from the catalog above
+   - subjectName: full subject name (e.g. "Physics", "Chemistry", "Mathematics")
+   - taskType: "Theory" | "NCERT Exercises" | "PYQs" | "Revision" | "Sample Paper"
+   - estHours: integer number of hours (1 to 5)
+   - completed: false
+   - notes: concise strategic tips (e.g., "Must solve NCERT Back Exercises Q4-15 & 2023 PYQ")
+
+=======================================================
+TARGET JSON SCHEMA FORMAT:
+=======================================================
+\`\`\`json
+${JSON.stringify(jsonSchemaExample, null, 2)}
+\`\`\`
+`;
+
+  // If user toggled to include current plan in prompt
+  if (options.includeCurrentPlanJson && options.currentPlan) {
+    prompt += `
+=======================================================
+CURRENT STUDY PLAN IN WEB APP (REFERENCE / REVISION):
+=======================================================
+The student currently has this active schedule in their app:
+• Title: "${options.currentPlan.title}"
+• Start Date: ${options.currentPlan.startDate} | End Date: ${options.currentPlan.targetEndDate}
+• Total Days Configured: ${options.currentPlan.days.length}
+• Days with tasks already planned: ${options.currentPlan.days.filter((d) => d.tasks.length > 0).length}
+
+Below is the current JSON configuration to analyze, improve, or rebalance based on their requested goals:
+\`\`\`json
+${JSON.stringify(options.currentPlan, null, 2)}
+\`\`\`
+`;
+  }
+
+  prompt += `
+=======================================================
+INSTRUCTIONS FOR IMPORTING INTO THE APP:
+=======================================================
+1. Generate the complete JSON array of days covering the requested duration.
+2. The user will click "Copy Shared Plan" or "Import Plan" in the Strategy Builder web app.
+3. The user will paste this JSON, and the app will instantly render:
+   - The interactive datewise calendar & chapter checklist
+   - School vs Holiday vs Self-Leave attendance dashboard
+   - Real-time remaining stats & backlog tracker!
+
+Now, please output the full, valid JSON plan based on the student's custom goals above.`;
+
+  return prompt;
+}
+

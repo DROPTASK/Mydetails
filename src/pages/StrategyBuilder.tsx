@@ -32,6 +32,8 @@ import {
   RefreshCw,
   Search,
   X,
+  Bot,
+  Wand2,
 } from "lucide-react";
 import {
   CBSE_12TH_SUBJECTS,
@@ -58,6 +60,7 @@ import {
   calculateDaysBetween,
   getDayOfWeek,
   SyllabusProgressItem,
+  generateAiStrategyPrompt,
 } from "../lib/strategyData";
 
 interface ConfirmDialogState {
@@ -94,7 +97,16 @@ export function StrategyBuilder() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showNewPlanModal, setShowNewPlanModal] = useState(false);
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
+  const [showAiPromptModal, setShowAiPromptModal] = useState(false);
   const [targetDateForNewTask, setTargetDateForNewTask] = useState<string>(getTodayIso());
+
+  // AI Prompt Builder State
+  const [aiGoalText, setAiGoalText] = useState(
+    "I want to score 95%+ in Class 12th Board examinations. Balance theory with NCERT questions, past 10-year board PYQs, and scheduled sample papers. Give more study hours on holidays and Sundays."
+  );
+  const [aiWeakSubjects, setAiWeakSubjects] = useState("Physics derivations & Chemistry Organic mechanisms");
+  const [aiIncludeCurrentPlan, setAiIncludeCurrentPlan] = useState<boolean>(false);
+  const [aiCopiedPrompt, setAiCopiedPrompt] = useState(false);
 
   // Task creation form state
   const [selectedAddSubjectId, setSelectedAddSubjectId] = useState<string>("physics");
@@ -704,6 +716,19 @@ export function StrategyBuilder() {
 
         {/* Global Action Bar */}
         <div className="flex items-center gap-2 flex-wrap">
+          {/* AI Strategy Prompt Builder Button */}
+          <button
+            onClick={() => {
+              sfxClick();
+              setShowAiPromptModal(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-sm transition-all"
+            title="Generate custom prompt for ChatGPT, Claude, Gemini to create compatible JSON strategy"
+          >
+            <Bot className="w-3.5 h-3.5" />
+            <span>AI Prompt Builder</span>
+          </button>
+
           <button
             onClick={() => {
               sfxClick();
@@ -762,8 +787,15 @@ export function StrategyBuilder() {
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-[var(--ink)]">{metrics.totalWorkingDays} <span className="text-xs font-normal text-[var(--muted)]">Days</span></div>
-            <div className="text-[11px] text-[var(--muted)] mt-0.5">Regular school hours (~5h study)</div>
+            <div className="text-2xl font-black text-[var(--ink)] flex items-baseline gap-1.5">
+              <span>{metrics.remainingWorkingDaysFromToday}</span>
+              <span className="text-xs font-bold text-amber-600 dark:text-amber-400">Left</span>
+              <span className="text-xs font-normal text-[var(--muted)]">/ {metrics.totalWorkingDays} Total</span>
+            </div>
+            <div className="text-[11px] text-[var(--muted)] mt-0.5 flex items-center justify-between">
+              <span>School days (~5h study)</span>
+              <span className="text-[10px] font-medium text-[var(--muted)]">({metrics.pastWorkingDays} past)</span>
+            </div>
           </div>
         </div>
 
@@ -776,8 +808,15 @@ export function StrategyBuilder() {
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{metrics.totalHolidays} <span className="text-xs font-normal text-[var(--muted)]">Days</span></div>
-            <div className="text-[11px] text-[var(--muted)] mt-0.5">Full-throttle prep (~10-12h study)</div>
+            <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 flex items-baseline gap-1.5">
+              <span>{metrics.remainingHolidaysFromToday}</span>
+              <span className="text-xs font-bold">Left</span>
+              <span className="text-xs font-normal text-[var(--muted)]">/ {metrics.totalHolidays} Total</span>
+            </div>
+            <div className="text-[11px] text-[var(--muted)] mt-0.5 flex items-center justify-between">
+              <span>High-output (~10-12h study)</span>
+              <span className="text-[10px] font-medium text-[var(--muted)]">({metrics.pastHolidays} past)</span>
+            </div>
           </div>
         </div>
 
@@ -790,8 +829,15 @@ export function StrategyBuilder() {
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-black text-purple-600 dark:text-purple-400">{metrics.totalSelfLeaves} <span className="text-xs font-normal text-[var(--muted)]">Days</span></div>
-            <div className="text-[11px] text-[var(--muted)] mt-0.5">Planned bunks for self-study</div>
+            <div className="text-2xl font-black text-purple-600 dark:text-purple-400 flex items-baseline gap-1.5">
+              <span>{metrics.remainingSelfLeavesFromToday}</span>
+              <span className="text-xs font-bold">Left</span>
+              <span className="text-xs font-normal text-[var(--muted)]">/ {metrics.totalSelfLeaves} Total</span>
+            </div>
+            <div className="text-[11px] text-[var(--muted)] mt-0.5 flex items-center justify-between">
+              <span>Planned bunks for self-study</span>
+              <span className="text-[10px] font-medium text-[var(--muted)]">({metrics.pastSelfLeaves} past)</span>
+            </div>
           </div>
         </div>
 
@@ -825,7 +871,7 @@ export function StrategyBuilder() {
             ) : (
               <div className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3 shrink-0" />
-                <span>On track! Zero backlog delay</span>
+                <span>On track! {metrics.remainingDaysFromToday} days left from today</span>
               </div>
             )}
           </div>
@@ -1505,19 +1551,19 @@ export function StrategyBuilder() {
                 <span>Reset (Sundays Only)</span>
               </button>
 
-              {/* Minimal Attendance Metrics Badges */}
+              {/* Minimal Attendance Metrics Badges (Synced with Real-Date Remaining from Today) */}
               <div className="flex items-center gap-1.5 sm:gap-2 text-xs flex-wrap">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-bold text-[11px]">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20 font-bold text-[11px]" title={`${metrics.remainingWorkingDaysFromToday} school days left from today out of ${metrics.totalWorkingDays} total`}>
                   <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  School: {metrics.totalWorkingDays}d
+                  School: {metrics.remainingWorkingDaysFromToday}d left <span className="opacity-60 text-[10px]">({metrics.totalWorkingDays} total)</span>
                 </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-bold text-[11px]">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-bold text-[11px]" title={`${metrics.remainingHolidaysFromToday} holidays left from today out of ${metrics.totalHolidays} total`}>
                   <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                  Holidays: {metrics.totalHolidays}d
+                  Holidays: {metrics.remainingHolidaysFromToday}d left <span className="opacity-60 text-[10px]">({metrics.totalHolidays} total)</span>
                 </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 font-bold text-[11px]">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20 font-bold text-[11px]" title={`${metrics.remainingSelfLeavesFromToday} self leaves left from today out of ${metrics.totalSelfLeaves} total`}>
                   <span className="w-2 h-2 rounded-full bg-purple-500" />
-                  Leaves: {metrics.totalSelfLeaves}d
+                  Leaves: {metrics.remainingSelfLeavesFromToday}d left <span className="opacity-60 text-[10px]">({metrics.totalSelfLeaves} total)</span>
                 </span>
               </div>
             </div>
@@ -2258,6 +2304,191 @@ export function StrategyBuilder() {
                   <Sparkles className="w-4 h-4" />
                   <span>{wizardMakeBlank ? "Create Blank Strategy" : "Generate Strategy"}</span>
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: AI STRATEGY PROMPT BUILDER (Export Custom Prompt & JSON Schema for other AIs) */}
+      {showAiPromptModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="surface-elevated max-w-2xl w-full rounded-3xl border border-[var(--hairline)] p-6 space-y-4 shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-sm">
+                  <Bot className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[var(--ink)] flex items-center gap-2">
+                    <span>AI Strategy Prompt Builder</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+                      Compatible with ChatGPT, Claude, Gemini
+                    </span>
+                  </h3>
+                  <p className="text-xs text-[var(--muted)]">
+                    Generate an exact prompt that teaches any AI how to build a 100% import-compatible JSON study plan.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAiPromptModal(false)}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)]"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs overflow-y-auto pr-1 flex-1">
+              {/* How it works banner */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-blue-500/10 border border-purple-500/20 space-y-1.5">
+                <div className="font-bold text-[var(--ink)] flex items-center gap-1.5 text-xs">
+                  <Sparkles className="w-4 h-4 text-purple-500" />
+                  <span>How to use with other AI (ChatGPT / Claude / Gemini):</span>
+                </div>
+                <ol className="list-decimal list-inside space-y-1 text-[var(--muted)] text-[11px] leading-relaxed">
+                  <li>Customize your target study goal and weak subjects below.</li>
+                  <li>Click <strong>&quot;Copy AI Prompt&quot;</strong> to copy the fully-engineered instructions + JSON schema.</li>
+                  <li>Paste it into ChatGPT, Claude, or Gemini — it will output a customized <code className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 font-mono">```json</code> study plan.</li>
+                  <li>Copy that AI&apos;s output JSON, come back here, click <strong>&quot;Copy Shared Plan&quot;</strong> &rarr; <strong>Paste &amp; Load Strategy</strong>!</li>
+                </ol>
+              </div>
+
+              {/* Real-Date Context Pill */}
+              <div className="p-3 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-[var(--muted)]">
+                  📅 Synced by Today: <strong className="text-[var(--ink)]">{formatLongDate(metrics.todayDate)}</strong>
+                </span>
+                <span className="text-[11px] font-semibold text-purple-600 dark:text-purple-400">
+                  {metrics.remainingDaysFromToday} study days remaining until finish target ({formatFriendlyDate(metrics.adjustedEndDate)})
+                </span>
+              </div>
+
+              {/* Student Goal Input */}
+              <div className="space-y-1">
+                <label className="font-bold text-[var(--ink)] flex items-center justify-between">
+                  <span>Your Custom Study Goals &amp; Instructions:</span>
+                  <span className="text-[10px] text-[var(--muted)] font-normal">Passed into AI prompt</span>
+                </label>
+                <textarea
+                  value={aiGoalText}
+                  onChange={(e) => setAiGoalText(e.target.value)}
+                  placeholder="Describe your exact goal (e.g. 95%+ target, 4 hours school daily, more time on weekends, focus on NCERT derivations)"
+                  rows={3}
+                  className="w-full p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)] resize-none"
+                />
+              </div>
+
+              {/* Weak Subjects / Focus Areas */}
+              <div className="space-y-1">
+                <label className="font-bold text-[var(--ink)]">Weak Chapters / High-Priority Focus:</label>
+                <input
+                  type="text"
+                  value={aiWeakSubjects}
+                  onChange={(e) => setAiWeakSubjects(e.target.value)}
+                  placeholder="e.g. Organic Chemistry mechanisms, Physics Optics derivations, Math Calculus PYQs"
+                  className="w-full p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </div>
+
+              {/* Toggle to Include Current Active Plan JSON */}
+              <div className="p-3 rounded-2xl bg-[var(--surface)] border border-[var(--hairline)] flex items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="font-bold text-[var(--ink)] flex items-center gap-1.5">
+                    <span>Include Current Plan in Prompt</span>
+                    <span className="text-[10px] font-semibold px-2 py-0.2 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                      {plan.days.length} days / {plan.days.reduce((acc, d) => acc + d.tasks.length, 0)} tasks
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-[var(--muted)]">
+                    Appends your active study calendar JSON into the prompt so AI can refine, reschedule, or rebalance your existing tasks.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={aiIncludeCurrentPlan}
+                  onClick={() => {
+                    sfxClick();
+                    setAiIncludeCurrentPlan(!aiIncludeCurrentPlan);
+                  }}
+                  className={`w-12 h-6.5 flex items-center rounded-full p-1 transition-colors cursor-pointer shrink-0 ${
+                    aiIncludeCurrentPlan ? "bg-purple-600" : "bg-[var(--surface-2)] border border-[var(--hairline)]"
+                  }`}
+                >
+                  <div
+                    className={`bg-white w-4.5 h-4.5 rounded-full shadow-md transform transition-transform ${
+                      aiIncludeCurrentPlan ? "translate-x-5.5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Live Prompt Preview */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="font-bold text-[var(--ink)]">
+                    Generated Prompt Preview (with Exact Chapter Catalog &amp; JSON Schema):
+                  </label>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                    {aiIncludeCurrentPlan ? "Includes Full Current Plan" : "Clean Slate Mode"}
+                  </span>
+                </div>
+                <div className="relative">
+                  <pre className="w-full max-h-52 p-3 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] font-mono text-[10px] text-[var(--ink)] overflow-y-auto whitespace-pre-wrap select-all leading-relaxed">
+                    {generateAiStrategyPrompt({
+                      userGoal: aiGoalText,
+                      studentName: plan.studentName,
+                      startDate: getTodayIso(),
+                      targetEndDate: metrics.adjustedEndDate,
+                      durationDays: metrics.remainingDaysFromToday,
+                      selectedSubjects: plan.selectedSubjectIds,
+                      weakSubjects: aiWeakSubjects,
+                      includeCurrentPlanJson: aiIncludeCurrentPlan,
+                      currentPlan: plan,
+                    })}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Quick Actions */}
+              <div className="flex items-center justify-between pt-2 border-t border-[var(--hairline)] gap-2 flex-wrap">
+                <div className="text-[11px] text-[var(--muted)]">
+                  Ready to paste into ChatGPT, Claude, Gemini, DeepSeek, or any LLM.
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowAiPromptModal(false)}
+                    className="px-4 py-2 rounded-xl surface-elevated border border-[var(--hairline)] font-semibold hover:bg-[var(--surface-2)] transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => {
+                      sfxClick();
+                      const fullPrompt = generateAiStrategyPrompt({
+                        userGoal: aiGoalText,
+                        studentName: plan.studentName,
+                        startDate: getTodayIso(),
+                        targetEndDate: metrics.adjustedEndDate,
+                        durationDays: metrics.remainingDaysFromToday,
+                        selectedSubjects: plan.selectedSubjectIds,
+                        weakSubjects: aiWeakSubjects,
+                        includeCurrentPlanJson: aiIncludeCurrentPlan,
+                        currentPlan: plan,
+                      });
+                      navigator.clipboard.writeText(fullPrompt);
+                      setAiCopiedPrompt(true);
+                      triggerToast("🤖 AI Prompt copied! Paste into ChatGPT, Claude or Gemini.");
+                      sfxSuccess();
+                      setTimeout(() => setAiCopiedPrompt(false), 3000);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-bold hover:opacity-95 shadow transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    {aiCopiedPrompt ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    <span>{aiCopiedPrompt ? "Prompt Copied!" : "Copy AI Prompt"}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
