@@ -63,33 +63,61 @@ export async function saveStrategyToCloudDb(
   message: string;
 }> {
   const localRecords = getLocalCloudPlans();
+  const cleanEmail = userEmail.trim().toLowerCase();
 
-  // Reuse existing shortCode if already created for this plan id
-  const existing = localRecords[plan.id];
-  const shortCode = existing?.shortCode || generateShortCode();
-  const planId = plan.id;
+  // If user is authenticated, check if they already have an existing plan short_code in DB or local
+  let shortCode = localRecords[plan.id]?.shortCode;
+  let planId = plan.id;
+
+  if (!shortCode && isSupabaseConfigured && cleanEmail && !cleanEmail.startsWith("guest@")) {
+    try {
+      const { data: existingUserPlan } = await supabase
+        .from("strategy_plans")
+        .select("id, short_code")
+        .ilike("user_email", cleanEmail)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existingUserPlan?.short_code) {
+        shortCode = existingUserPlan.short_code;
+        if (existingUserPlan.id) {
+          planId = existingUserPlan.id;
+        }
+      }
+    } catch {
+      // Continue
+    }
+  }
+
+  if (!shortCode) {
+    shortCode = generateShortCode();
+  }
+
   const now = Date.now();
 
-  // Create standardized clean share URL with short code
+  // Standardized share URL: use window origin if available
   const origin = typeof window !== "undefined" ? window.location.origin : "https://vanshkumar.in";
   // Standardized direct share URL using short code synced from DB
-  const shareUrl = `${origin}/strategy?code=${shortCode}`;
+  const shareUrl = `${origin}/apps/strategy-builder?code=${shortCode}`;
 
   const record: CloudPlanRecord = {
     id: planId,
     shortCode,
-    userEmail: userEmail.toLowerCase(),
+    userEmail: cleanEmail,
     title: plan.title,
     studentName: plan.studentName,
-    planData: plan,
+    planData: {
+      ...plan,
+      id: planId,
+    },
     shareUrl,
-    createdAt: existing?.createdAt || now,
+    createdAt: localRecords[planId]?.createdAt || now,
     updatedAt: now,
   };
 
   // 1. Save in local cloud registry
   localRecords[planId] = record;
-  // Also index by shortCode for 1-click lookup
   localRecords[shortCode] = record;
   saveLocalCloudPlans(localRecords);
 
@@ -102,10 +130,13 @@ export async function saveStrategyToCloudDb(
         {
           id: planId,
           short_code: shortCode.toUpperCase(),
-          user_email: userEmail.toLowerCase(),
+          user_email: cleanEmail,
           student_name: plan.studentName || "",
           title: plan.title || "Class 12th Board Strategy",
-          plan_data: plan,
+          plan_data: {
+            ...plan,
+            id: planId,
+          },
           share_url: shareUrl,
           updated_at: new Date().toISOString(),
         },
@@ -114,9 +145,11 @@ export async function saveStrategyToCloudDb(
 
       if (!planDbError) {
         isDatabaseSynced = true;
+      } else {
+        console.warn("Supabase strategy_plans upsert warning:", planDbError);
       }
 
-      // Also register in short_links table for universal url redirects
+      // Also register in short_links table for direct short slug redirects (e.g. /12th-xxxx)
       await supabase.from("short_links").upsert(
         {
           slug: shortCode.toLowerCase(),
@@ -127,8 +160,8 @@ export async function saveStrategyToCloudDb(
         },
         { onConflict: "slug" }
       );
-    } catch {
-      // Supabase table fallback
+    } catch (e) {
+      console.warn("Supabase table fallback:", e);
     }
   }
 
@@ -145,22 +178,44 @@ export async function saveStrategyToCloudDb(
 }
 
 /**
- * Looks up a strategy plan by Short Code, Cloud ID, or Share Token
+ * Looks up a strategy plan by Short Code, Cloud ID, URL parameter, or Account Email
  */
 export async function loadStrategyFromCloud(
   identifier: string
 ): Promise<StrategyPlan | null> {
   if (!identifier) return null;
-  const clean = identifier.trim();
+  let clean = identifier.trim();
+
+  // If a full URL was passed, extract code or plan or slug
+  if (clean.includes("http://") || clean.includes("https://") || clean.includes("?")) {
+    try {
+      const matchCode = clean.match(/[?&](?:code|cloudPlan)=([^&#\s]+)/i);
+      if (matchCode) {
+        clean = decodeURIComponent(matchCode[1]).trim();
+      } else {
+        const matchPlan = clean.match(/[?&](?:shared|plan)=([^&#\s]+)/i);
+        if (matchPlan) {
+          clean = decodeURIComponent(matchPlan[1]).trim();
+        }
+      }
+    } catch {
+      // Continue
+    }
+  }
+
+  // Normalize short code variations (e.g. "T5QV" -> "12TH-T5QV", "12th-t5qv" -> "12TH-T5QV")
+  const upper = clean.toUpperCase();
+  const formattedCode = upper.startsWith("12TH-")
+    ? upper
+    : clean.length <= 6 && !clean.includes("@") && !clean.startsWith("plan_")
+    ? `12TH-${upper}`
+    : upper;
 
   // 1. Check local cloud registry by ID or shortCode
   const localRecords = getLocalCloudPlans();
-  if (localRecords[clean]) {
-    return localRecords[clean].planData;
-  }
-  if (localRecords[clean.toUpperCase()]) {
-    return localRecords[clean.toUpperCase()].planData;
-  }
+  if (localRecords[clean]?.planData) return localRecords[clean].planData;
+  if (localRecords[upper]?.planData) return localRecords[upper].planData;
+  if (localRecords[formattedCode]?.planData) return localRecords[formattedCode].planData;
 
   // 2. Try decoding as base64 share string directly
   const decoded = decodePlanFromShareString(clean);
@@ -169,37 +224,178 @@ export async function loadStrategyFromCloud(
   // 3. Try querying Supabase strategy_plans table directly
   if (isSupabaseConfigured) {
     try {
-      // Check strategy_plans table by short_code or id
-      const { data: planRecord } = await supabase
+      // Check by short_code (exact & formatted) or id
+      const { data: planRecord, error } = await supabase
         .from("strategy_plans")
-        .select("plan_data")
-        .or(`short_code.eq.${clean.toUpperCase()},id.eq.${clean}`)
+        .select("plan_data, id, short_code, user_email, share_url, student_name, title")
+        .or(`short_code.ilike.${upper},short_code.ilike.${formattedCode},id.eq.${clean}`)
+        .limit(1)
         .maybeSingle();
 
       if (planRecord?.plan_data) {
-        return planRecord.plan_data as StrategyPlan;
+        // Cache in local storage for fast offline access
+        const planObj = planRecord.plan_data as StrategyPlan;
+        const cacheRec: CloudPlanRecord = {
+          id: planRecord.id,
+          shortCode: planRecord.short_code,
+          userEmail: planRecord.user_email,
+          title: planRecord.title || planObj.title,
+          studentName: planRecord.student_name || planObj.studentName,
+          planData: planObj,
+          shareUrl: planRecord.share_url || `/apps/strategy-builder?code=${planRecord.short_code}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+        localRecords[cacheRec.id] = cacheRec;
+        localRecords[cacheRec.shortCode] = cacheRec;
+        saveLocalCloudPlans(localRecords);
+
+        return planObj;
       }
 
-      // Fallback: check short_links table
-      const { data } = await supabase
+      // If user passed an email address, lookup their latest saved plan
+      if (clean.includes("@")) {
+        const { data: emailRecord } = await supabase
+          .from("strategy_plans")
+          .select("plan_data")
+          .ilike("user_email", clean.toLowerCase())
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (emailRecord?.plan_data) {
+          return emailRecord.plan_data as StrategyPlan;
+        }
+      }
+
+      // Fallback: check short_links table for slug
+      const { data: shortLinkData } = await supabase
         .from("short_links")
         .select("target_url")
-        .eq("slug", clean.toLowerCase())
+        .or(`slug.ilike.${clean.toLowerCase()},slug.ilike.${formattedCode.toLowerCase()}`)
         .maybeSingle();
 
-      if (data?.target_url) {
-        const match = data.target_url.match(/[?&]plan=([^&#\s]+)/);
-        if (match) {
-          const fromUrl = decodePlanFromShareString(match[1]);
+      if (shortLinkData?.target_url) {
+        const matchCode = shortLinkData.target_url.match(/[?&]code=([^&#\s]+)/i);
+        if (matchCode && matchCode[1] !== clean) {
+          const loaded = await loadStrategyFromCloud(matchCode[1]);
+          if (loaded) return loaded;
+        }
+        const matchPlan = shortLinkData.target_url.match(/[?&]plan=([^&#\s]+)/i);
+        if (matchPlan) {
+          const fromUrl = decodePlanFromShareString(matchPlan[1]);
           if (fromUrl) return fromUrl;
         }
       }
-    } catch {
-      // Fallback
+    } catch (e) {
+      console.warn("Error querying strategy plan from Supabase:", e);
     }
   }
 
   return null;
+}
+
+/**
+ * Fetches the active/latest plan saved for a logged-in user directly from Cloud DB
+ */
+export async function fetchUserLatestPlanFromCloud(
+  userEmail: string
+): Promise<CloudPlanRecord | null> {
+  if (!userEmail) return null;
+  const cleanEmail = userEmail.trim().toLowerCase();
+
+  // Check local cache first
+  const localList = getUserCloudPlans(cleanEmail);
+  const localLatest = localList.length > 0 ? localList[0] : null;
+
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from("strategy_plans")
+        .select("*")
+        .ilike("user_email", cleanEmail)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (data && data.plan_data) {
+        const record: CloudPlanRecord = {
+          id: data.id,
+          shortCode: data.short_code,
+          userEmail: data.user_email,
+          title: data.title || (data.plan_data as StrategyPlan).title,
+          studentName: data.student_name || (data.plan_data as StrategyPlan).studentName,
+          planData: data.plan_data as StrategyPlan,
+          shareUrl: data.share_url,
+          createdAt: new Date(data.created_at || Date.now()).getTime(),
+          updatedAt: new Date(data.updated_at || Date.now()).getTime(),
+        };
+
+        // Sync into local cache
+        const local = getLocalCloudPlans();
+        local[record.id] = record;
+        local[record.shortCode] = record;
+        saveLocalCloudPlans(local);
+
+        return record;
+      }
+    } catch (e) {
+      console.error("Error fetching user cloud plan from DB:", e);
+    }
+  }
+
+  return localLatest;
+}
+
+/**
+ * Get all plans saved by the current logged-in user from DB and local storage
+ */
+export async function getUserCloudPlansFromDb(
+  userEmail: string
+): Promise<CloudPlanRecord[]> {
+  if (!userEmail) return [];
+  const cleanEmail = userEmail.trim().toLowerCase();
+  const list: CloudPlanRecord[] = [];
+  const seenIds = new Set<string>();
+
+  if (isSupabaseConfigured) {
+    try {
+      const { data } = await supabase
+        .from("strategy_plans")
+        .select("*")
+        .ilike("user_email", cleanEmail)
+        .order("updated_at", { ascending: false });
+
+      if (data && data.length > 0) {
+        const local = getLocalCloudPlans();
+        for (const row of data) {
+          if (row.plan_data && !seenIds.has(row.id)) {
+            seenIds.add(row.id);
+            const rec: CloudPlanRecord = {
+              id: row.id,
+              shortCode: row.short_code,
+              userEmail: row.user_email,
+              title: row.title || row.plan_data.title,
+              studentName: row.student_name || row.plan_data.studentName,
+              planData: row.plan_data as StrategyPlan,
+              shareUrl: row.share_url,
+              createdAt: new Date(row.created_at || Date.now()).getTime(),
+              updatedAt: new Date(row.updated_at || Date.now()).getTime(),
+            };
+            list.push(rec);
+            local[rec.id] = rec;
+            local[rec.shortCode] = rec;
+          }
+        }
+        saveLocalCloudPlans(local);
+        return list;
+      }
+    } catch {
+      // Fallback to local
+    }
+  }
+
+  return getUserCloudPlans(cleanEmail);
 }
 
 /**

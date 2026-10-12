@@ -36,6 +36,8 @@ export const RESERVED_APP_PATHS = new Set([
   "links",
   "projects",
   "python",
+  "strategy",
+  "strategy-builder",
   "8ball-pool",
   "pool",
   "misc",

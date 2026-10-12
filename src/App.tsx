@@ -93,8 +93,9 @@ function AppRoutes() {
         <Route path="projects" element={<Suspense fallback={<RouteFallback />}><Projects /></Suspense>} />
         <Route path="apps" element={<Suspense fallback={<RouteFallback />}><Apps /></Suspense>} />
         <Route path="apps/strategy-builder" element={<Suspense fallback={<RouteFallback />}><StrategyBuilder /></Suspense>} />
-        <Route path="apps/strategy" element={<Navigate to="/apps/strategy-builder" replace />} />
-        <Route path="strategy" element={<Navigate to="/apps/strategy-builder" replace />} />
+        <Route path="apps/strategy" element={<Suspense fallback={<RouteFallback />}><StrategyBuilder /></Suspense>} />
+        <Route path="strategy" element={<Suspense fallback={<RouteFallback />}><StrategyBuilder /></Suspense>} />
+        <Route path="strategy-builder" element={<Suspense fallback={<RouteFallback />}><StrategyBuilder /></Suspense>} />
         <Route path="apps/python" element={<Suspense fallback={<RouteFallback />}><PythonInterpreter /></Suspense>} />
         <Route path="python" element={<Navigate to="/apps/python" replace />} />
         <Route path="movies" element={<Suspense fallback={<RouteFallback />}><Movies /></Suspense>} />

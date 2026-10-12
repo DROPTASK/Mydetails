@@ -52,6 +52,7 @@ import {
   Smartphone,
   Share,
   Settings,
+  Loader2,
 } from "lucide-react";
 import {
   CBSE_12TH_SUBJECTS,
@@ -94,6 +95,7 @@ import {
 import {
   saveStrategyToCloudDb,
   loadStrategyFromCloud,
+  fetchUserLatestPlanFromCloud,
   getSocialShareLinks,
   CloudPlanRecord,
 } from "../lib/cloudStrategy";
@@ -247,18 +249,28 @@ export function StrategyBuilder() {
   const [copiedShareUrl, setCopiedShareUrl] = useState(false);
   const [copiedShortCode, setCopiedShortCode] = useState(false);
   const autoSyncDebounceRef = useRef<any>(null);
+  const [codeToLoad, setCodeToLoad] = useState("");
+  const [isLoadingCode, setIsLoadingCode] = useState(false);
 
-  // Auto-load plan from URL query param (?code= or ?plan=)
+  // Auto-load plan from URL query param (?code= or ?plan=) or from authenticated user's Cloud DB
   useEffect(() => {
     const codeParam = searchParams.get("code") || searchParams.get("cloudPlan");
     const planParam = searchParams.get("plan");
 
     if (codeParam) {
+      setIsLoadingCode(true);
       loadStrategyFromCloud(codeParam).then((loaded) => {
+        setIsLoadingCode(false);
         if (loaded) {
           updatePlan(loaded);
+          const upper = codeParam.toUpperCase();
+          const cleanCode = upper.startsWith("12TH-") ? upper : upper.length <= 6 ? `12TH-${upper}` : upper;
+          setEasyShortCode(cleanCode);
+          setEasyShareUrl(`${window.location.origin}/apps/strategy-builder?code=${cleanCode}`);
           triggerToast(`✅ Loaded Shared Plan: "${loaded.title}"!`);
           sfxSuccess();
+        } else {
+          triggerToast(`⚠️ Could not find plan for code "${codeParam}".`);
         }
       });
     } else if (planParam) {
@@ -268,8 +280,51 @@ export function StrategyBuilder() {
         triggerToast(`✅ Loaded Shared Plan: "${decoded.title}"!`);
         sfxSuccess();
       }
+    } else if (authUser?.email) {
+      // User is logged in on this device - fetch their latest cloud plan from DB!
+      fetchUserLatestPlanFromCloud(authUser.email).then((cloudRec) => {
+        if (cloudRec && cloudRec.planData) {
+          updatePlan(cloudRec.planData);
+          setEasyShareUrl(cloudRec.shareUrl);
+          setEasyShortCode(cloudRec.shortCode);
+          triggerToast(`☁️ Synced latest plan for ${authUser.email}!`);
+        }
+      });
     }
-  }, []);
+  }, [searchParams]);
+
+  // Load a plan explicitly using Short Code or URL
+  const handleLoadByCode = async (explicitCode?: string) => {
+    sfxClick();
+    const targetCode = (explicitCode || codeToLoad).trim();
+    if (!targetCode) {
+      triggerToast("Please enter a short code or share link.");
+      return;
+    }
+    setIsLoadingCode(true);
+    try {
+      const loaded = await loadStrategyFromCloud(targetCode);
+      if (loaded) {
+        updatePlan(loaded);
+        const upper = targetCode.toUpperCase();
+        const cleanCode = upper.startsWith("12TH-") ? upper : upper.length <= 6 ? `12TH-${upper}` : upper;
+        setEasyShortCode(cleanCode);
+        setEasyShareUrl(`${window.location.origin}/apps/strategy-builder?code=${cleanCode}`);
+        setShowSettingsModal(false);
+        setShowEasyShareModal(false);
+        setShowImportModal(false);
+        setCodeToLoad("");
+        triggerToast(`🎉 Successfully loaded plan: "${loaded.title}" (${loaded.studentName})!`);
+        sfxSuccess();
+      } else {
+        triggerToast(`❌ No plan found for code "${targetCode}". Please verify.`);
+      }
+    } catch {
+      triggerToast("Failed to load plan from cloud.");
+    } finally {
+      setIsLoadingCode(false);
+    }
+  };
 
   // Request 8-digit OTP
   const handleSendAuthOtp = async () => {
@@ -302,12 +357,22 @@ export function StrategyBuilder() {
       if (res.success && res.user) {
         setAuthUser(res.user);
         setShowAuthModal(false);
-        triggerToast(`🎉 Welcome, ${res.user.displayName}! Signed in with Cloud DB sync.`);
         sfxSuccess();
-        // Immediately save active plan to DB
-        const saved = await saveStrategyToCloudDb(plan, res.user.email);
-        setEasyShareUrl(saved.shareUrl);
-        setEasyShortCode(saved.shortCode);
+
+        // 1. Fetch user's existing saved plan from Supabase DB so other devices load their existing work!
+        const existingCloudPlan = await fetchUserLatestPlanFromCloud(res.user.email);
+        if (existingCloudPlan && existingCloudPlan.planData) {
+          updatePlan(existingCloudPlan.planData);
+          setEasyShareUrl(existingCloudPlan.shareUrl);
+          setEasyShortCode(existingCloudPlan.shortCode);
+          triggerToast(`🎉 Welcome back, ${res.user.displayName}! Loaded your cloud plan from Supabase DB.`);
+        } else {
+          // 2. New user account: save current active plan to DB
+          const saved = await saveStrategyToCloudDb(plan, res.user.email);
+          setEasyShareUrl(saved.shareUrl);
+          setEasyShortCode(saved.shortCode);
+          triggerToast(`🎉 Welcome, ${res.user.displayName}! Signed in and synced to Cloud DB.`);
+        }
       } else {
         setAuthError(res.error || "Incorrect 8-digit code. Please check and try again.");
       }
@@ -880,33 +945,51 @@ export function StrategyBuilder() {
     setTimeout(() => setCopiedJson(false), 2500);
   };
 
-  // Import Plan from pasted string / JSON
-  const handleImportPlan = () => {
+  // Import Plan from pasted string / short code / URL / JSON
+  const handleImportPlan = async () => {
     sfxClick();
     setImportError("");
     const trimmed = importText.trim();
     if (!trimmed) {
-      setImportError("Please paste a share link, code, or JSON.");
+      setImportError("Please paste a short code (e.g. 12TH-T5QV), share link, or JSON.");
       return;
     }
 
-    // Try extracting shared query param if a full URL was pasted
+    // 1. Try resolving via Cloud DB (short code, ID, URL query)
+    try {
+      const fromCloud = await loadStrategyFromCloud(trimmed);
+      if (fromCloud) {
+        updatePlan(fromCloud);
+        const upper = trimmed.toUpperCase();
+        const codeClean = upper.startsWith("12TH-") ? upper : upper.length <= 6 ? `12TH-${upper}` : upper;
+        setEasyShortCode(codeClean);
+        setEasyShareUrl(`${window.location.origin}/apps/strategy-builder?code=${codeClean}`);
+        setShowImportModal(false);
+        setImportText("");
+        triggerToast(`✅ Loaded Strategy Plan from Cloud DB: "${fromCloud.title}"!`);
+        sfxSuccess();
+        return;
+      }
+    } catch {
+      // Continue to next parsers
+    }
+
+    // 2. Try extracting shared query param if a full URL was pasted
     let candidate = trimmed;
     if (trimmed.includes("shared=") || trimmed.includes("plan=")) {
       try {
         const u = new URL(trimmed);
         candidate = u.searchParams.get("shared") || u.searchParams.get("plan") || trimmed;
       } catch {
-        // regex match
         const match = trimmed.match(/[?&](?:shared|plan)=([^&#\s]+)/);
         if (match) candidate = match[1];
       }
     }
 
-    // Try decoding base64 share string
+    // 3. Try decoding base64 share string
     let decoded = decodePlanFromShareString(candidate);
 
-    // Fallback: Try raw JSON parse
+    // 4. Fallback: Try raw JSON parse
     if (!decoded) {
       try {
         const parsed = JSON.parse(trimmed);
@@ -925,7 +1008,7 @@ export function StrategyBuilder() {
       triggerToast("✅ Strategy Plan imported and loaded successfully!");
       sfxSuccess();
     } else {
-      setImportError("Could not recognize this plan format. Ensure you pasted a valid share link or JSON.");
+      setImportError("Could not recognize this plan. Ensure you entered a valid 4-6 digit short code (e.g. 12TH-T5QV), share URL, or JSON.");
     }
   };
 
@@ -3975,10 +4058,71 @@ export function StrategyBuilder() {
 
                 <div className="pt-2 border-t border-[var(--hairline)] flex items-center justify-between text-[11px] text-[var(--muted)]">
                   <span>Auto-Sync Status:</span>
-                  <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>Active (Syncs on Every Action)</span>
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>{dbSyncStatus === "saving" ? "Syncing..." : "Active (Every Action)"}</span>
+                    </span>
+                    <button
+                      onClick={handleSaveNowToDb}
+                      disabled={isSavingToDb}
+                      className="px-2 py-0.5 rounded-md surface-elevated border border-[var(--hairline)] hover:bg-[var(--surface-2)] text-[10px] font-bold text-[var(--ink)] cursor-pointer transition-colors"
+                    >
+                      {isSavingToDb ? "Saving..." : "Sync Now"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Current Active Short Code */}
+                {easyShortCode && (
+                  <div className="pt-2 border-t border-[var(--hairline)] flex items-center justify-between">
+                    <div>
+                      <div className="text-[10px] text-[var(--muted)] font-bold uppercase tracking-wider">Your Plan Code</div>
+                      <div className="text-xs font-mono font-bold text-[var(--accent)]">{easyShortCode}</div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        sfxClick();
+                        navigator.clipboard.writeText(easyShortCode);
+                        setCopiedShortCode(true);
+                        triggerToast("📋 Plan Code copied to clipboard!");
+                        sfxSuccess();
+                        setTimeout(() => setCopiedShortCode(false), 2000);
+                      }}
+                      className="px-2.5 py-1 rounded-lg surface-elevated border border-[var(--hairline)] hover:bg-[var(--surface-2)] text-[11px] font-bold text-[var(--ink)] flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedShortCode ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedShortCode ? "Copied" : "Copy Code"}</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* Open Plan by Short Code */}
+                <div className="pt-2 border-t border-[var(--hairline)] space-y-1.5">
+                  <div className="text-[11px] font-bold text-[var(--ink)] flex items-center justify-between">
+                    <span>Open / Import Plan by Code:</span>
+                    <span className="text-[10px] text-[var(--muted)]">Syncs instantly from Cloud DB</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={codeToLoad}
+                      onChange={(e) => setCodeToLoad(e.target.value.toUpperCase())}
+                      placeholder="Enter code (e.g. 12TH-T5QV or T5QV)"
+                      className="flex-1 px-3 py-1.5 rounded-xl bg-[var(--surface-elevated)] border border-[var(--hairline-strong)] text-xs font-mono font-bold text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleLoadByCode();
+                      }}
+                    />
+                    <button
+                      onClick={() => handleLoadByCode()}
+                      disabled={isLoadingCode || !codeToLoad.trim()}
+                      className="px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-bold hover:opacity-90 disabled:opacity-40 transition-opacity flex items-center gap-1 cursor-pointer shrink-0"
+                    >
+                      {isLoadingCode ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Cloud className="w-3.5 h-3.5" />}
+                      <span>Load</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

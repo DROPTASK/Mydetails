@@ -28,9 +28,15 @@ export function ShortLinkResolver() {
       return;
     }
 
-    // If it is a reserved in-app path, forward to it immediately
+    // If it is a reserved in-app path, forward to it immediately preserving search query
     if (RESERVED_APP_PATHS.has(slug)) {
-      navigate(`/${slug}`, { replace: true });
+      navigate(`/${slug}${window.location.search || ""}`, { replace: true });
+      return;
+    }
+
+    // If it is a direct Class 12th Strategy Short Code (e.g. 12TH-T5QV or plan_...)
+    if (slug.toUpperCase().startsWith("12TH-") || slug.startsWith("plan_")) {
+      navigate(`/apps/strategy-builder?code=${slug.toUpperCase()}`, { replace: true });
       return;
     }
 
