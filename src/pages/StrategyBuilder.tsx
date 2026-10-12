@@ -3193,7 +3193,7 @@ export function StrategyBuilder() {
                 </label>
                 <input
                   type="url"
-                  placeholder="e.g. https://www.youtube.com/watch?v=..."
+                  placeholder="e.g. https://www.youtube.com/live/... or watch?v=..."
                   value={selectedAddVideoUrl}
                   onChange={(e) => setSelectedAddVideoUrl(e.target.value)}
                   className="w-full p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
@@ -3669,11 +3669,11 @@ export function StrategyBuilder() {
               <div className="space-y-1">
                 <label className="font-bold text-[var(--ink)] flex items-center justify-between">
                   <span>YouTube Video Link:</span>
-                  <span className="text-[10px] text-[var(--muted)] font-normal">watch / shorts / youtu.be</span>
+                  <span className="text-[10px] text-[var(--muted)] font-normal">watch / live / shorts / youtu.be</span>
                 </label>
                 <input
                   type="url"
-                  placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...)"
+                  placeholder="Paste YouTube link (e.g. https://www.youtube.com/live/... or watch?v=...)"
                   value={videoEditModal.videoUrl}
                   onChange={(e) =>
                     setVideoEditModal({

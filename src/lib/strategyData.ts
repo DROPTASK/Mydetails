@@ -766,23 +766,46 @@ export function getTodayIso(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// Extract clean YouTube video ID from various URL formats
-export function extractYouTubeVideoId(url: string): string | null {
+// Extract clean YouTube video ID from various URL formats including live streams (/live/), shorts (/shorts/), watch, embed, youtu.be, etc.
+export function extractYouTubeVideoId(url?: string | null): string | null {
   if (!url || typeof url !== "string") return null;
   const clean = url.trim();
-  // Direct ID check (11 chars alphanumeric, dash, underscore)
+  if (!clean) return null;
+
+  // 1. Direct ID check (exact 11 chars alphanumeric, dash, underscore)
   if (/^[a-zA-Z0-9_-]{11}$/.test(clean)) return clean;
-  // youtu.be/ID
-  const shortMatch = clean.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+
+  // 2. youtu.be/ID (e.g. https://youtu.be/Lmqph4gVB9Y?si=...)
+  const shortMatch = clean.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/i);
   if (shortMatch) return shortMatch[1];
-  // youtube.com/watch?v=ID or /embed/ID or /v/ID or /shorts/ID
-  const standardMatch = clean.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=))([a-zA-Z0-9_-]{11})/);
+
+  // 3. YouTube live streams: youtube.com/live/ID (e.g. https://www.youtube.com/live/Lmqph4gVB9Y?si=...)
+  const liveMatch = clean.match(/(?:youtube(?:-nocookie)?\.com)\/live\/([a-zA-Z0-9_-]{11})/i);
+  if (liveMatch) return liveMatch[1];
+
+  // 4. YouTube shorts: youtube.com/shorts/ID
+  const shortsMatch = clean.match(/(?:youtube(?:-nocookie)?\.com)\/shorts\/([a-zA-Z0-9_-]{11})/i);
+  if (shortsMatch) return shortsMatch[1];
+
+  // 5. Standard watch?v= or /embed/ or /v/ or /e/
+  const standardMatch = clean.match(
+    /(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?|live|shorts)\/|.*[?&]v=))([a-zA-Z0-9_-]{11})/i
+  );
   if (standardMatch) return standardMatch[1];
+
+  // 6. Generic catch-all for any URL path containing /live/, /shorts/, /v/, /embed/
+  const anyPathMatch = clean.match(/(?:\/)(?:live|shorts|v|embed)\/([a-zA-Z0-9_-]{11})/i);
+  if (anyPathMatch) return anyPathMatch[1];
+
+  // 7. Generic query param match e.g. ?v=ID or &v=ID
+  const anyVQuery = clean.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
+  if (anyVQuery) return anyVQuery[1];
+
   return null;
 }
 
-// Get YouTube high-quality thumbnail
-export function getYouTubeThumbnailUrl(urlOrId: string): string | null {
+// Get YouTube high-quality thumbnail (works for standard videos, live streams, shorts)
+export function getYouTubeThumbnailUrl(urlOrId?: string | null): string | null {
   const id = extractYouTubeVideoId(urlOrId);
   if (!id) return null;
   return `https://img.youtube.com/vi/${id}/mqdefault.jpg`;
@@ -1136,25 +1159,9 @@ export function saveSyllabusProgress(progress: Record<string, SyllabusProgressIt
   }
 }
 
-// Extract YouTube Video ID from any standard or short URL (youtube.com/watch?v=..., youtu.be/..., shorts/..., embed/...)
-export function extractYoutubeVideoId(url?: string): string | null {
-  if (!url) return null;
-  const trimmed = url.trim();
-  if (!trimmed) return null;
-
-  // Pattern covering standard watch, shorts, embed, youtu.be, etc.
-  const regExp = /(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
-  const match = trimmed.match(regExp);
-  if (match && match[1]) {
-    return match[1];
-  }
-
-  // If user simply pasted an 11-char ID
-  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  return null;
+// Extract YouTube Video ID from any standard or short URL (youtube.com/watch?v=..., youtu.be/..., shorts/..., live/..., embed/...)
+export function extractYoutubeVideoId(url?: string | null): string | null {
+  return extractYouTubeVideoId(url);
 }
 
 // Shareable Compression URL Helper: Serializes plan to a safe base64 URL string
