@@ -110,3 +110,15 @@ export type AboutBio = {
   status_title: string;
   status_subtitle: string;
 };
+
+export type DbStrategyPlan = {
+  id: string;
+  short_code: string;
+  user_email: string;
+  student_name: string;
+  title: string;
+  plan_data: any;
+  share_url: string;
+  created_at?: string;
+  updated_at?: string;
+};

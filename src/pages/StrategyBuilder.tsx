@@ -34,6 +34,24 @@ import {
   X,
   Bot,
   Wand2,
+  Play,
+  Video,
+  Youtube,
+  VideoOff,
+  Edit3,
+  ShieldCheck,
+  Maximize,
+  Minimize,
+  Database,
+  Cloud,
+  LogIn,
+  LogOut,
+  Mail,
+  Key,
+  Send,
+  Smartphone,
+  Share,
+  Settings,
 } from "lucide-react";
 import {
   CBSE_12TH_SUBJECTS,
@@ -61,7 +79,24 @@ import {
   getDayOfWeek,
   SyllabusProgressItem,
   generateAiStrategyPrompt,
+  extractYouTubeVideoId,
+  getYouTubeThumbnailUrl,
+  formatVideoTime,
 } from "../lib/strategyData";
+import { InAppVideoPlayer } from "../components/InAppVideoPlayer";
+import {
+  getCurrentAuthUser,
+  requestEmailOtp,
+  verifyEmailOtp,
+  logoutAuthUser,
+  AuthUser,
+} from "../lib/authOtp";
+import {
+  saveStrategyToCloudDb,
+  loadStrategyFromCloud,
+  getSocialShareLinks,
+  CloudPlanRecord,
+} from "../lib/cloudStrategy";
 
 interface ConfirmDialogState {
   isOpen: boolean;
@@ -83,7 +118,29 @@ export function StrategyBuilder() {
   );
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<"planner" | "syllabus" | "calendar" | "backlog">("planner");
+  const [activeTab, setActiveTab] = useState<"today" | "planner" | "syllabus" | "calendar" | "backlog">("today");
+
+  // In-App Video Player State
+  const [activeVideoModal, setActiveVideoModal] = useState<{
+    isOpen: boolean;
+    videoUrl: string;
+    videoTitle?: string;
+    taskName?: string;
+    subjectName?: string;
+    dateStr: string;
+    taskId: string;
+    isCompleted: boolean;
+  } | null>(null);
+
+  // Attach / Edit Video URL Modal State
+  const [videoEditModal, setVideoEditModal] = useState<{
+    isOpen: boolean;
+    dateStr: string;
+    taskId: string;
+    taskName: string;
+    videoUrl: string;
+    videoTitle: string;
+  } | null>(null);
 
   // Filter in Planner Tab
   const [dayFilter, setDayFilter] = useState<"all" | "working" | "holiday" | "self_leave" | "backlog">("all");
@@ -114,6 +171,8 @@ export function StrategyBuilder() {
   const [selectedAddTaskType, setSelectedAddTaskType] = useState<PlanChapterTask["taskType"]>("Theory");
   const [selectedAddHours, setSelectedAddHours] = useState<number>(3);
   const [selectedAddNotes, setSelectedAddNotes] = useState<string>("");
+  const [selectedAddVideoUrl, setSelectedAddVideoUrl] = useState<string>("");
+  const [selectedAddVideoTitle, setSelectedAddVideoTitle] = useState<string>("");
 
   // Attendance Calendar Day Inspector & Quick-Edit state
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<PlanDay | null>(null);
@@ -135,6 +194,174 @@ export function StrategyBuilder() {
 
   // Toast feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Fullscreen Study Mode State
+  const [isPlannerFullscreen, setIsPlannerFullscreen] = useState(false);
+  const plannerContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const togglePlannerFullscreen = () => {
+    sfxClick();
+    if (!document.fullscreenElement) {
+      if (plannerContainerRef.current?.requestFullscreen) {
+        plannerContainerRef.current.requestFullscreen().catch(() => {});
+      } else if ((plannerContainerRef.current as any)?.webkitRequestFullscreen) {
+        (plannerContainerRef.current as any).webkitRequestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      } else if ((document as any)?.webkitExitFullscreen) {
+        (document as any).webkitExitFullscreen();
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFs = () => {
+      setIsPlannerFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", handleFs);
+    document.addEventListener("webkitfullscreenchange", handleFs);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFs);
+      document.removeEventListener("webkitfullscreenchange", handleFs);
+    };
+  }, []);
+
+  // Auth User State (Email OTP 8-digit)
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => getCurrentAuthUser());
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authOtp, setAuthOtp] = useState("");
+  const [authOtpSent, setAuthOtpSent] = useState(false);
+  const [authIsLoading, setAuthIsLoading] = useState(false);
+  const [authError, setAuthError] = useState("");
+
+  // Cloud DB Save & Easy Sharing State
+  const [isSavingToDb, setIsSavingToDb] = useState(false);
+  const [showEasyShareModal, setShowEasyShareModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [dbSyncStatus, setDbSyncStatus] = useState<"synced" | "saving" | "offline">("synced");
+  const [easyShareUrl, setEasyShareUrl] = useState("");
+  const [easyShortCode, setEasyShortCode] = useState("");
+  const [copiedShareUrl, setCopiedShareUrl] = useState(false);
+  const [copiedShortCode, setCopiedShortCode] = useState(false);
+  const autoSyncDebounceRef = useRef<any>(null);
+
+  // Auto-load plan from URL query param (?code= or ?plan=)
+  useEffect(() => {
+    const codeParam = searchParams.get("code") || searchParams.get("cloudPlan");
+    const planParam = searchParams.get("plan");
+
+    if (codeParam) {
+      loadStrategyFromCloud(codeParam).then((loaded) => {
+        if (loaded) {
+          updatePlan(loaded);
+          triggerToast(`✅ Loaded Shared Plan: "${loaded.title}"!`);
+          sfxSuccess();
+        }
+      });
+    } else if (planParam) {
+      const decoded = decodePlanFromShareString(planParam);
+      if (decoded) {
+        updatePlan(decoded);
+        triggerToast(`✅ Loaded Shared Plan: "${decoded.title}"!`);
+        sfxSuccess();
+      }
+    }
+  }, []);
+
+  // Request 8-digit OTP
+  const handleSendAuthOtp = async () => {
+    sfxClick();
+    setAuthError("");
+    setAuthIsLoading(true);
+    try {
+      const res = await requestEmailOtp(authEmail);
+      if (res.success) {
+        setAuthOtpSent(true);
+        triggerToast(`📨 Verification code dispatched to ${authEmail}`);
+        sfxSuccess();
+      } else {
+        setAuthError(res.message || "Failed to send OTP.");
+      }
+    } catch {
+      setAuthError("Failed to deliver OTP. Please check email address.");
+    } finally {
+      setAuthIsLoading(false);
+    }
+  };
+
+  // Verify 8-digit OTP
+  const handleVerifyAuthOtp = async () => {
+    sfxClick();
+    setAuthError("");
+    setAuthIsLoading(true);
+    try {
+      const res = verifyEmailOtp(authEmail, authOtp);
+      if (res.success && res.user) {
+        setAuthUser(res.user);
+        setShowAuthModal(false);
+        triggerToast(`🎉 Welcome, ${res.user.displayName}! Signed in with Cloud DB sync.`);
+        sfxSuccess();
+        // Immediately save active plan to DB
+        const saved = await saveStrategyToCloudDb(plan, res.user.email);
+        setEasyShareUrl(saved.shareUrl);
+        setEasyShortCode(saved.shortCode);
+      } else {
+        setAuthError(res.error || "Incorrect 8-digit code. Please check and try again.");
+      }
+    } finally {
+      setAuthIsLoading(false);
+    }
+  };
+
+  // Logout
+  const handleLogout = () => {
+    sfxClick();
+    logoutAuthUser();
+    setAuthUser(null);
+    triggerToast("Logged out from cloud sync.");
+  };
+
+  // Save Now in DB button action
+  const handleSaveNowToDb = async () => {
+    sfxClick();
+    if (!authUser) {
+      setShowAuthModal(true);
+      triggerToast("🔐 Please enter your email to receive an 8-digit OTP and save in DB.");
+      return;
+    }
+
+    setIsSavingToDb(true);
+    try {
+      const res = await saveStrategyToCloudDb(plan, authUser.email);
+      setEasyShareUrl(res.shareUrl);
+      setEasyShortCode(res.shortCode);
+      setShowEasyShareModal(true);
+      triggerToast(`☁️ Saved to Cloud DB! Code: ${res.shortCode}`);
+      sfxSuccess();
+    } catch {
+      triggerToast("Failed to save to database. Please try again.");
+    } finally {
+      setIsSavingToDb(false);
+    }
+  };
+
+  // Open Easy Share Modal
+  const handleOpenEasyShare = async () => {
+    sfxClick();
+    setIsSavingToDb(true);
+    try {
+      const email = authUser?.email || "guest@vanshkumar.in";
+      const res = await saveStrategyToCloudDb(plan, email);
+      setEasyShareUrl(res.shareUrl);
+      setEasyShortCode(res.shortCode);
+      setShowEasyShareModal(true);
+    } finally {
+      setIsSavingToDb(false);
+    }
+  };
 
   // Confirmation Dialog State
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
@@ -296,10 +523,27 @@ export function StrategyBuilder() {
     }
   }, [searchParams]);
 
-  // Sync plan changes to localStorage
+  // Sync plan changes to localStorage and automatically to Cloud DB on every action
   const updatePlan = (newPlan: StrategyPlan) => {
     setPlan(newPlan);
     saveStrategyPlan(newPlan);
+
+    // Auto-sync to DB in background
+    if (autoSyncDebounceRef.current) {
+      clearTimeout(autoSyncDebounceRef.current);
+    }
+    setDbSyncStatus("saving");
+    autoSyncDebounceRef.current = setTimeout(async () => {
+      try {
+        const userEmail = authUser?.email || "guest@vanshkumar.in";
+        const res = await saveStrategyToCloudDb(newPlan, userEmail);
+        setEasyShareUrl(res.shareUrl);
+        setEasyShortCode(res.shortCode);
+        setDbSyncStatus("synced");
+      } catch {
+        setDbSyncStatus("offline");
+      }
+    }, 800);
   };
 
   // Backlog and Attendance Metrics calculation
@@ -412,6 +656,8 @@ export function StrategyBuilder() {
     setSelectedAddTaskType("Theory");
     setSelectedAddHours(3);
     setSelectedAddNotes("");
+    setSelectedAddVideoUrl("");
+    setSelectedAddVideoTitle("");
     setShowAddTaskModal(true);
   };
 
@@ -432,6 +678,8 @@ export function StrategyBuilder() {
       estHours: selectedAddHours,
       completed: false,
       notes: selectedAddNotes || undefined,
+      videoUrl: selectedAddVideoUrl.trim() || undefined,
+      videoTitle: selectedAddVideoTitle.trim() || undefined,
     };
 
     let foundDay = false;
@@ -463,6 +711,81 @@ export function StrategyBuilder() {
 
     setShowAddTaskModal(false);
     triggerToast(`Added ${chap.name} to ${formatFriendlyDate(targetDateForNewTask)}`);
+    sfxSuccess();
+  };
+
+  // Save / Update YouTube Video for specific task
+  const handleSaveVideoEdit = (dateStr: string, taskId: string, videoUrl: string, videoTitle?: string) => {
+    sfxClick();
+    const updatedDays = plan.days.map((day) => {
+      if (day.date !== dateStr) return day;
+      return {
+        ...day,
+        tasks: day.tasks.map((task) => {
+          if (task.id !== taskId) return task;
+          return {
+            ...task,
+            videoUrl: videoUrl.trim() || undefined,
+            videoTitle: videoTitle?.trim() || undefined,
+          };
+        }),
+      };
+    });
+
+    updatePlan({
+      ...plan,
+      days: updatedDays,
+    });
+
+    setVideoEditModal(null);
+    triggerToast(videoUrl.trim() ? "📺 YouTube lecture video attached!" : "Video link removed.");
+    sfxSuccess();
+  };
+
+  // Shift an overdue backlog task to today
+  const handleShiftBacklogTaskToToday = (sourceDate: string, taskId: string) => {
+    sfxClick();
+    let movedTask: PlanChapterTask | null = null;
+    const cleanedDays = plan.days.map((day) => {
+      if (day.date !== sourceDate) return day;
+      const target = day.tasks.find((t) => t.id === taskId);
+      if (target) movedTask = target;
+      return {
+        ...day,
+        tasks: day.tasks.filter((t) => t.id !== taskId),
+      };
+    });
+
+    if (!movedTask) return;
+
+    let foundToday = false;
+    const finalDays = cleanedDays.map((day) => {
+      if (day.date === todayIso) {
+        foundToday = true;
+        return {
+          ...day,
+          tasks: [...day.tasks, movedTask!],
+        };
+      }
+      return day;
+    });
+
+    if (!foundToday) {
+      finalDays.push({
+        date: todayIso,
+        dayType: "working",
+        targetStudyHours: 5,
+        tasks: [movedTask],
+      });
+      finalDays.sort((a, b) => a.date.localeCompare(b.date));
+    }
+
+    updatePlan({
+      ...plan,
+      days: finalDays,
+    });
+
+    triggerToast(`Rescheduled ${(movedTask as PlanChapterTask).chapterName} to Today!`);
     sfxSuccess();
   };
 
@@ -627,6 +950,26 @@ export function StrategyBuilder() {
     sfxSuccess();
   };
 
+  // Today's day data from active plan
+  const todayDay = useMemo(() => {
+    return plan.days.find((d) => d.date === todayIso);
+  }, [plan.days, todayIso]);
+
+  // Today backlog tasks (from past dates that are incomplete)
+  const pastBacklogTasks = useMemo(() => {
+    const list: { day: PlanDay; task: PlanChapterTask }[] = [];
+    for (const day of plan.days) {
+      if (day.date < todayIso) {
+        for (const task of day.tasks) {
+          if (!task.completed) {
+            list.push({ day, task });
+          }
+        }
+      }
+    }
+    return list;
+  }, [plan.days, todayIso]);
+
   // Filtered days for planner view
   const filteredDays = useMemo(() => {
     return plan.days.filter((day) => {
@@ -671,7 +1014,14 @@ export function StrategyBuilder() {
   }, [syllabusProgress]);
 
   return (
-    <div className="space-y-6 max-w-6xl mx-auto pb-16">
+    <div
+      ref={plannerContainerRef}
+      className={`space-y-6 ${
+        isPlannerFullscreen
+          ? "fixed inset-0 z-50 bg-[var(--surface)] overflow-y-auto p-4 sm:p-8"
+          : "max-w-6xl mx-auto pb-16"
+      }`}
+    >
       {/* Toast Notification (Ultra-Glassmorphism Body with frosted blur, subtle gradient border & depth) */}
       {toastMessage && (
         <div className="fixed top-20 right-4 z-50 max-w-sm sm:max-w-md bg-white/70 dark:bg-zinc-900/75 backdrop-blur-xl border border-white/40 dark:border-white/10 text-[var(--ink)] px-4 py-3 rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.18)] ring-1 ring-black/5 dark:ring-white/10 flex items-center gap-3 animate-in fade-in slide-in-from-top-3 duration-300">
@@ -714,64 +1064,57 @@ export function StrategyBuilder() {
           </p>
         </div>
 
-        {/* Global Action Bar */}
+        {/* Minimal Streamlined Header Action Bar */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* AI Strategy Prompt Builder Button */}
+          {/* Subtle Real-time DB Sync Indicator */}
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+              dbSyncStatus === "saving"
+                ? "bg-amber-500/10 border-amber-500/30 text-amber-600 dark:text-amber-400"
+                : "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+            }`}
+            title="Changes automatically sync to cloud database on every action"
+          >
+            <Cloud className={`w-3.5 h-3.5 ${dbSyncStatus === "saving" ? "animate-pulse" : ""}`} />
+            <span>{dbSyncStatus === "saving" ? "Syncing..." : "Saved to Cloud"}</span>
+            {easyShortCode && (
+              <span className="font-mono text-[10px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 font-extrabold ml-0.5">
+                {easyShortCode}
+              </span>
+            )}
+          </div>
+
+          {/* Direct Share Button */}
+          <button
+            onClick={handleOpenEasyShare}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold shadow-sm transition-all cursor-pointer"
+            title="Open Share link with standardized short code"
+          >
+            <Share className="w-3.5 h-3.5" />
+            <span>Share</span>
+          </button>
+
+          {/* Fullscreen Zen Mode Button */}
+          <button
+            onClick={togglePlannerFullscreen}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl surface-elevated border border-[var(--hairline)] hover:border-[var(--accent)] text-xs font-semibold text-[var(--ink)] transition-colors cursor-pointer"
+            title={isPlannerFullscreen ? "Exit Fullscreen Focus Mode" : "Fullscreen Focus Mode"}
+          >
+            {isPlannerFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{isPlannerFullscreen ? "Exit Fullscreen" : "Fullscreen"}</span>
+          </button>
+
+          {/* Unified Settings Button (hosts Login, AI Prompt Builder, Copy Plan, New Strategy, Reset) */}
           <button
             onClick={() => {
               sfxClick();
-              setShowAiPromptModal(true);
+              setShowSettingsModal(true);
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold shadow-sm transition-all"
-            title="Generate custom prompt for ChatGPT, Claude, Gemini to create compatible JSON strategy"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl surface-elevated border border-[var(--hairline)] hover:border-[var(--accent)] text-xs font-bold text-[var(--ink)] transition-all cursor-pointer"
+            title="Open Settings & Strategy Tools"
           >
-            <Bot className="w-3.5 h-3.5" />
-            <span>AI Prompt Builder</span>
-          </button>
-
-          <button
-            onClick={() => {
-              sfxClick();
-              setShowShareModal(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--accent)] text-white text-xs font-bold hover:opacity-90 shadow-sm transition-all"
-            title="Share or Copy your study plan with friends"
-          >
-            <Share2 className="w-3.5 h-3.5" />
-            <span>Share Plan</span>
-          </button>
-
-          <button
-            onClick={() => {
-              sfxClick();
-              setShowImportModal(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl surface-elevated border border-[var(--hairline)] text-[var(--ink)] text-xs font-semibold hover:border-[var(--accent)]/40 transition-all"
-            title="Paste and duplicate a shared study strategy"
-          >
-            <Copy className="w-3.5 h-3.5 text-[var(--muted)]" />
-            <span>Copy Shared Plan</span>
-          </button>
-
-          <button
-            onClick={() => {
-              sfxClick();
-              setShowNewPlanModal(true);
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl surface-elevated border border-[var(--hairline)] text-[var(--ink)] text-xs font-semibold hover:border-[var(--accent)]/40 transition-all"
-            title="Generate a fresh customized strategy"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-[var(--muted)]" />
-            <span>New Strategy</span>
-          </button>
-
-          <button
-            onClick={handleFullResetEntirePlan}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-rose-500/30 text-rose-500 hover:bg-rose-500/10 text-xs font-semibold transition-all cursor-pointer"
-            title="Reset complete strategy back to default CBSE Class 12th curriculum"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset Plan</span>
+            <Settings className="w-3.5 h-3.5 text-[var(--accent)]" />
+            <span>Settings</span>
           </button>
         </div>
       </div>
@@ -945,6 +1288,26 @@ export function StrategyBuilder() {
           <button
             onClick={() => {
               sfxClick();
+              setActiveTab("today");
+            }}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === "today"
+                ? "bg-[var(--accent)] text-white shadow"
+                : "text-[var(--muted)] hover:text-[var(--ink)] hover:bg-[var(--surface-2)]"
+            }`}
+          >
+            <Flame className="w-4 h-4 text-amber-500 fill-amber-500" />
+            <span>Today</span>
+            {todayDay && todayDay.tasks.length > 0 && (
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-white/20">
+                {todayDay.tasks.filter((t) => t.completed).length}/{todayDay.tasks.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => {
+              sfxClick();
               setActiveTab("planner");
             }}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
@@ -1023,6 +1386,444 @@ export function StrategyBuilder() {
           </button>
         )}
       </div>
+
+      {/* TAB 0: TODAY STUDY DASHBOARD */}
+      {activeTab === "today" && (
+        <div className="space-y-4">
+          {/* Today Overview Header Card */}
+          <div className="surface-elevated p-4 sm:p-5 rounded-3xl border border-[var(--hairline)] space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-[var(--accent)] flex items-center gap-1.5">
+                    <Flame className="w-4 h-4 text-amber-500 fill-amber-500" />
+                    Today&apos;s Focus
+                  </span>
+                  <span className="text-xs text-[var(--muted)]">•</span>
+                  <span className="text-xs text-[var(--muted)] font-medium">
+                    {formatLongDate(todayIso)}
+                  </span>
+                </div>
+                <h2 className="text-lg sm:text-xl font-black text-[var(--ink)]">
+                  {formatFriendlyDate(todayIso)}
+                </h2>
+              </div>
+
+              {/* Day Status / Schedule Type Switcher */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="inline-flex rounded-xl bg-[var(--surface-2)] p-0.5 border border-[var(--hairline)]">
+                  <button
+                    onClick={() => handleChangeDayType(todayIso, "working")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      (todayDay?.dayType || "working") === "working"
+                        ? "bg-amber-500 text-black shadow-sm"
+                        : "text-[var(--muted)] hover:text-[var(--ink)]"
+                    }`}
+                    title="School working day (5h study target)"
+                  >
+                    <School className="w-3.5 h-3.5" />
+                    <span>School Day</span>
+                  </button>
+                  <button
+                    onClick={() => handleChangeDayType(todayIso, "holiday")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      todayDay?.dayType === "holiday"
+                        ? "bg-emerald-500 text-white shadow-sm"
+                        : "text-[var(--muted)] hover:text-[var(--ink)]"
+                    }`}
+                    title="Official Holiday / Sunday (10h study target)"
+                  >
+                    <Sun className="w-3.5 h-3.5" />
+                    <span>Holiday</span>
+                  </button>
+                  <button
+                    onClick={() => handleChangeDayType(todayIso, "self_leave")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      todayDay?.dayType === "self_leave"
+                        ? "bg-purple-500 text-white shadow-sm"
+                        : "text-[var(--muted)] hover:text-[var(--ink)]"
+                    }`}
+                    title="Self Leave / Prep Bunk (8.5h study target)"
+                  >
+                    <Bed className="w-3.5 h-3.5" />
+                    <span>Self Leave</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => handleOpenAddTask(todayIso)}
+                  className="px-3.5 py-1.5 rounded-xl bg-[var(--accent)] hover:opacity-90 text-white text-xs font-bold shadow flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Chapter for Today</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Metrics for Today */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2 border-t border-[var(--hairline)]">
+              <div className="p-3 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <div className="text-[10px] font-bold text-[var(--muted)] uppercase">Target Study Hours</div>
+                <div className="text-base font-black text-[var(--ink)] mt-0.5">
+                  {todayDay?.targetStudyHours || 5} Hours
+                </div>
+              </div>
+              <div className="p-3 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <div className="text-[10px] font-bold text-[var(--muted)] uppercase">Scheduled Hours</div>
+                <div className="text-base font-black text-indigo-500 mt-0.5">
+                  {(todayDay?.tasks || []).reduce((acc, t) => acc + (t.estHours || 0), 0)} Hours
+                </div>
+              </div>
+              <div className="p-3 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <div className="text-[10px] font-bold text-[var(--muted)] uppercase">Chapters Today</div>
+                <div className="text-base font-black text-[var(--ink)] mt-0.5">
+                  {(todayDay?.tasks || []).filter((t) => t.completed).length} / {(todayDay?.tasks || []).length} Done
+                </div>
+              </div>
+              <div className="p-3 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <div className="text-[10px] font-bold text-[var(--muted)] uppercase">Active Backlog</div>
+                <div className={`text-base font-black mt-0.5 ${pastBacklogTasks.length > 0 ? "text-rose-500" : "text-emerald-500"}`}>
+                  {pastBacklogTasks.length > 0 ? `${pastBacklogTasks.length} Pending` : "0 (On Track! 🎉)"}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Today's Tasks Section */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-sm text-[var(--ink)] flex items-center gap-2">
+                <span>Today&apos;s Chapter Schedule</span>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--surface-2)] text-[var(--muted)]">
+                  {(todayDay?.tasks || []).length} Chapters
+                </span>
+              </h3>
+              <button
+                onClick={() => handleOpenAddTask(todayIso)}
+                className="text-xs font-bold text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Another Task</span>
+              </button>
+            </div>
+
+            {(!todayDay || todayDay.tasks.length === 0) ? (
+              <div className="text-center py-12 surface-elevated rounded-3xl border border-[var(--hairline)] p-6 space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-500 border border-amber-500/20 flex items-center justify-center mx-auto">
+                  <Flame className="w-6 h-6" />
+                </div>
+                <h4 className="font-bold text-sm text-[var(--ink)]">No tasks scheduled for today yet</h4>
+                <p className="text-xs text-[var(--muted)] max-w-sm mx-auto">
+                  Assign chapters from your Class 12 syllabus, paste a lecture video link, or catch up on past backlogs below!
+                </p>
+                <button
+                  onClick={() => handleOpenAddTask(todayIso)}
+                  className="px-4 py-2 rounded-xl bg-[var(--accent)] text-white text-xs font-bold shadow hover:opacity-90 transition-opacity inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Assign Today&apos;s First Chapter</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {todayDay.tasks.map((task) => {
+                  const subject = CBSE_12TH_SUBJECTS.find((s) => s.id === task.subjectId);
+                  const videoId = extractYouTubeVideoId(task.videoUrl || "");
+                  return (
+                    <div
+                      key={task.id}
+                      className={`surface-elevated rounded-2xl border p-4 transition-all space-y-3 ${
+                        task.completed
+                          ? "bg-emerald-500/[0.04] border-emerald-500/30 opacity-85"
+                          : "border-[var(--hairline)] hover:border-[var(--accent)]/40 shadow-sm"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        {/* Task Information */}
+                        <div className="flex items-start gap-3 min-w-0">
+                          <button
+                            onClick={() => handleToggleTask(todayIso, task.id)}
+                            className={`mt-0.5 shrink-0 transition-transform active:scale-90 cursor-pointer ${
+                              task.completed
+                                ? "text-emerald-500"
+                                : "text-[var(--muted)] hover:text-[var(--accent)]"
+                            }`}
+                            title={task.completed ? "Mark incomplete" : "Mark completed"}
+                          >
+                            {task.completed ? (
+                              <CheckCircle2 className="w-6 h-6 fill-emerald-500/15" />
+                            ) : (
+                              <Circle className="w-6 h-6" />
+                            )}
+                          </button>
+
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className="text-[10px] font-black px-2 py-0.5 rounded-md"
+                                style={{
+                                  backgroundColor: subject?.bgLight || "rgba(59, 130, 246, 0.12)",
+                                  color: subject?.color || "#3b82f6",
+                                }}
+                              >
+                                {subject?.icon} {task.subjectName}
+                              </span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[var(--surface-2)] text-[var(--muted)]">
+                                {task.taskType}
+                              </span>
+                              <span className="text-[10px] text-[var(--muted)] flex items-center gap-1 font-mono">
+                                <Clock className="w-3 h-3" />
+                                <span>{task.estHours}h planned</span>
+                              </span>
+                            </div>
+
+                            <h4
+                              className={`text-sm sm:text-base font-bold ${
+                                task.completed ? "line-through text-[var(--muted)]" : "text-[var(--ink)]"
+                              }`}
+                            >
+                              {task.chapterName}
+                            </h4>
+
+                            {task.notes && (
+                              <p className="text-xs text-[var(--muted)]">{task.notes}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Top Right Actions */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() =>
+                              setVideoEditModal({
+                                isOpen: true,
+                                dateStr: todayIso,
+                                taskId: task.id,
+                                taskName: task.chapterName,
+                                videoUrl: task.videoUrl || "",
+                                videoTitle: task.videoTitle || "",
+                              })
+                            }
+                            className={`p-1.5 rounded-xl border border-[var(--hairline)] hover:bg-[var(--surface-2)] text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer ${
+                              task.videoUrl ? "text-red-500" : "text-[var(--muted)]"
+                            }`}
+                            title={task.videoUrl ? "Edit YouTube Link" : "Attach YouTube Link"}
+                          >
+                            <Video className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">
+                              {task.videoUrl ? "Edit Video" : "Attach Video"}
+                            </span>
+                          </button>
+
+                          <button
+                            onClick={() => handleDeleteTask(todayIso, task.id)}
+                            className="p-1.5 rounded-xl text-[var(--muted)] hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                            title="Delete task from today"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Video Player Card Feature (When video link is attached) */}
+                      {task.videoUrl ? (
+                        <div className="p-3 rounded-2xl bg-gradient-to-r from-red-500/5 via-purple-500/5 to-indigo-500/5 border border-red-500/20 flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {videoId ? (
+                              <div className="relative w-16 h-10 rounded-lg overflow-hidden shrink-0 bg-black">
+                                <img
+                                  src={getYouTubeThumbnailUrl(videoId) || ""}
+                                  alt="Video Thumbnail"
+                                  className="w-full h-full object-cover"
+                                />
+                                <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                                  <Play className="w-3.5 h-3.5 text-white fill-white" />
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="w-10 h-10 rounded-xl bg-red-600/10 text-red-500 flex items-center justify-center shrink-0">
+                                <Youtube className="w-5 h-5" />
+                              </div>
+                            )}
+
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-black uppercase tracking-wider text-red-500 flex items-center gap-1">
+                                  <Youtube className="w-3 h-3" />
+                                  Lecture Video Attached
+                                </span>
+                                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-500 font-bold">
+                                  <ShieldCheck className="w-3 h-3" />
+                                  Ad-Shield Ready
+                                </span>
+                              </div>
+                              <p className="text-xs font-bold text-[var(--ink)] truncate max-w-md">
+                                {task.videoTitle || task.chapterName}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => {
+                                sfxClick();
+                                setActiveVideoModal({
+                                  isOpen: true,
+                                  videoUrl: task.videoUrl!,
+                                  videoTitle: task.videoTitle || task.chapterName,
+                                  taskName: task.chapterName,
+                                  subjectName: task.subjectName,
+                                  dateStr: todayIso,
+                                  taskId: task.id,
+                                  isCompleted: task.completed,
+                                });
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow-md shadow-red-600/20 active:scale-95 transition-all flex items-center gap-2 cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-white" />
+                              <span>Watch in In-App Player</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-2.5 rounded-xl bg-[var(--surface-2)]/60 border border-dashed border-[var(--hairline)] flex items-center justify-between text-xs text-[var(--muted)]">
+                          <span className="flex items-center gap-1.5">
+                            <Video className="w-3.5 h-3.5 text-zinc-400" />
+                            <span>No lecture video attached yet.</span>
+                          </span>
+                          <button
+                            onClick={() =>
+                              setVideoEditModal({
+                                isOpen: true,
+                                dateStr: todayIso,
+                                taskId: task.id,
+                                taskName: task.chapterName,
+                                videoUrl: "",
+                                videoTitle: "",
+                              })
+                            }
+                            className="text-xs font-bold text-[var(--accent)] hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Attach YouTube Link</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Past Backlogs Catch-Up Section (If any past tasks remain incomplete) */}
+          {pastBacklogTasks.length > 0 && (
+            <div className="surface-elevated p-4 sm:p-5 rounded-3xl border border-rose-500/30 bg-rose-500/[0.02] space-y-3 mt-6">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-rose-500/10 text-rose-500 flex items-center justify-center">
+                    <AlertTriangle className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-[var(--ink)]">
+                      Catch Up on Past Backlog Chapters Today
+                    </h3>
+                    <p className="text-xs text-[var(--muted)]">
+                      {pastBacklogTasks.length} pending chapter(s) from earlier dates
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleAutoShiftBacklog}
+                  className="px-3 py-1.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 text-xs font-bold hover:bg-rose-500/20 transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Auto-Reschedule Schedule (+{metrics.backlogDays}d)</span>
+                </button>
+              </div>
+
+              <div className="space-y-2 pt-1">
+                {pastBacklogTasks.map(({ day, task }) => {
+                  const subject = CBSE_12TH_SUBJECTS.find((s) => s.id === task.subjectId);
+                  return (
+                    <div
+                      key={`backlog-${day.date}-${task.id}`}
+                      className="p-3 rounded-2xl bg-[var(--surface)] border border-rose-500/20 flex flex-wrap items-center justify-between gap-3 shadow-sm"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <button
+                          onClick={() => handleToggleTask(day.date, task.id)}
+                          className="shrink-0 text-rose-400 hover:text-emerald-500 transition-colors cursor-pointer"
+                          title="Mark task completed"
+                        >
+                          <Circle className="w-5 h-5" />
+                        </button>
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-rose-500/10 text-rose-500 border border-rose-500/20">
+                              Due {formatFriendlyDate(day.date)}
+                            </span>
+                            <span
+                              className="text-[10px] font-black px-2 py-0.5 rounded-md"
+                              style={{
+                                backgroundColor: subject?.bgLight || "rgba(59, 130, 246, 0.12)",
+                                color: subject?.color || "#3b82f6",
+                              }}
+                            >
+                              {subject?.icon} {task.subjectName}
+                            </span>
+                            <span className="text-[10px] font-mono text-[var(--muted)]">
+                              {task.estHours}h
+                            </span>
+                          </div>
+                          <div className="font-bold text-xs sm:text-sm text-[var(--ink)] truncate mt-0.5">
+                            {task.chapterName}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {task.videoUrl && (
+                          <button
+                            onClick={() => {
+                              sfxClick();
+                              setActiveVideoModal({
+                                isOpen: true,
+                                videoUrl: task.videoUrl!,
+                                videoTitle: task.videoTitle || task.chapterName,
+                                taskName: task.chapterName,
+                                subjectName: task.subjectName,
+                                dateStr: day.date,
+                                taskId: task.id,
+                                isCompleted: task.completed,
+                              });
+                            }}
+                            className="px-2.5 py-1.5 rounded-xl bg-red-600/10 text-red-600 dark:text-red-400 border border-red-500/20 text-xs font-semibold hover:bg-red-600/20 transition-colors flex items-center gap-1 cursor-pointer"
+                          >
+                            <Play className="w-3 h-3 fill-current" />
+                            <span>Lecture</span>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => handleShiftBacklogTaskToToday(day.date, task.id)}
+                          className="px-2.5 py-1.5 rounded-xl surface-elevated border border-[var(--hairline)] hover:border-[var(--accent)] text-xs font-semibold text-[var(--ink)] transition-colors flex items-center gap-1 cursor-pointer"
+                          title="Move this task to today's schedule"
+                        >
+                          <ArrowRight className="w-3 h-3 text-[var(--accent)]" />
+                          <span>Shift to Today</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* TAB 1: DATEWISE STUDY PLANNER */}
       {activeTab === "planner" && (
@@ -1301,14 +2102,62 @@ export function StrategyBuilder() {
                                       {task.notes}
                                     </div>
                                   )}
+
+                                  {task.videoUrl && (
+                                    <div className="mt-1 flex items-center gap-1.5">
+                                      <button
+                                        onClick={() => {
+                                          sfxClick();
+                                          setActiveVideoModal({
+                                            isOpen: true,
+                                            videoUrl: task.videoUrl!,
+                                            videoTitle: task.videoTitle || task.chapterName,
+                                            taskName: task.chapterName,
+                                            subjectName: task.subjectName,
+                                            dateStr: day.date,
+                                            taskId: task.id,
+                                            isCompleted: task.completed,
+                                          });
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-red-600/10 text-red-600 dark:text-red-400 border border-red-500/20 text-[10px] font-bold hover:bg-red-600/20 transition-all cursor-pointer"
+                                        title="Watch lecture video in Ad-Shield player"
+                                      >
+                                        <Play className="w-2.5 h-2.5 fill-current" />
+                                        <span>Watch Video</span>
+                                        <ShieldCheck className="w-2.5 h-2.5 text-emerald-500" />
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
 
                               {/* Right Actions */}
                               <div className="flex items-center gap-1 shrink-0">
                                 <button
+                                  onClick={() => {
+                                    sfxClick();
+                                    setVideoEditModal({
+                                      isOpen: true,
+                                      dateStr: day.date,
+                                      taskId: task.id,
+                                      taskName: task.chapterName,
+                                      videoUrl: task.videoUrl || "",
+                                      videoTitle: task.videoTitle || "",
+                                    });
+                                  }}
+                                  className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                                    task.videoUrl
+                                      ? "text-red-500 hover:bg-red-500/10"
+                                      : "text-[var(--muted)] hover:text-red-500 hover:bg-red-500/10"
+                                  }`}
+                                  title={task.videoUrl ? "Edit / Replace YouTube Video" : "Attach YouTube Lecture Video"}
+                                >
+                                  <Video className="w-3.5 h-3.5" />
+                                </button>
+
+                                <button
                                   onClick={() => handleDeleteTask(day.date, task.id)}
-                                  className="p-1 rounded-lg text-[var(--muted)] hover:text-rose-500 hover:bg-rose-500/10 transition-colors"
+                                  className="p-1 rounded-lg text-[var(--muted)] hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
                                   title="Remove chapter from this day"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -2142,6 +2991,40 @@ export function StrategyBuilder() {
                 />
               </div>
 
+              {/* YouTube Video URL (Optional) */}
+              <div className="space-y-1">
+                <label className="font-bold text-[var(--ink)] flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Youtube className="w-3.5 h-3.5 text-red-500" />
+                    <span>YouTube Lecture Video Link (Optional):</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-500 font-semibold flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" />
+                    Ad-Shield Mode
+                  </span>
+                </label>
+                <input
+                  type="url"
+                  placeholder="e.g. https://www.youtube.com/watch?v=..."
+                  value={selectedAddVideoUrl}
+                  onChange={(e) => setSelectedAddVideoUrl(e.target.value)}
+                  className="w-full p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </div>
+
+              {selectedAddVideoUrl.trim() && (
+                <div className="space-y-1">
+                  <label className="font-bold text-[var(--ink)]">Video Lecture Title (Optional):</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Chapter One-Shot Marathon Lecture"
+                    value={selectedAddVideoTitle}
+                    onChange={(e) => setSelectedAddVideoTitle(e.target.value)}
+                    className="w-full p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-3">
                 <button
                   onClick={() => setShowAddTaskModal(false)}
@@ -2550,6 +3433,660 @@ export function StrategyBuilder() {
                   <RotateCcw className="w-3.5 h-3.5" />
                 )}
                 <span>{confirmDialog.confirmLabel}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: ATTACH / EDIT YOUTUBE VIDEO LINK */}
+      {videoEditModal && videoEditModal.isOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div
+            className="surface-elevated max-w-md w-full rounded-3xl border border-[var(--hairline)] p-6 space-y-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-red-600/10 text-red-500 border border-red-500/20 flex items-center justify-center">
+                  <Youtube className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-[var(--ink)]">
+                    {videoEditModal.videoUrl ? "Edit Lecture Video" : "Attach YouTube Video"}
+                  </h3>
+                  <p className="text-[11px] text-[var(--muted)] truncate max-w-[240px]">
+                    {videoEditModal.taskName}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setVideoEditModal(null)}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs">
+              {/* Ad-Shield feature note */}
+              <div className="p-3 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
+                <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-500" />
+                <span className="text-[11px] leading-relaxed">
+                  In-App Player includes <strong>Ad-Shield mode</strong>, speed controls (0.5x–2x), and real-time study progress timer.
+                </span>
+              </div>
+
+              {/* Video URL Input */}
+              <div className="space-y-1">
+                <label className="font-bold text-[var(--ink)] flex items-center justify-between">
+                  <span>YouTube Video Link:</span>
+                  <span className="text-[10px] text-[var(--muted)] font-normal">watch / shorts / youtu.be</span>
+                </label>
+                <input
+                  type="url"
+                  placeholder="Paste YouTube link (e.g. https://www.youtube.com/watch?v=...)"
+                  value={videoEditModal.videoUrl}
+                  onChange={(e) =>
+                    setVideoEditModal({
+                      ...videoEditModal,
+                      videoUrl: e.target.value,
+                    })
+                  }
+                  className="w-full p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                  autoFocus
+                />
+              </div>
+
+              {/* Optional Custom Video Title */}
+              <div className="space-y-1">
+                <label className="font-bold text-[var(--ink)]">Video Title (Optional):</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Full Chapter Marathon / Concept One-Shot"
+                  value={videoEditModal.videoTitle}
+                  onChange={(e) =>
+                    setVideoEditModal({
+                      ...videoEditModal,
+                      videoTitle: e.target.value,
+                    })
+                  }
+                  className="w-full p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                />
+              </div>
+
+              {/* Preview Thumbnail if valid video */}
+              {extractYouTubeVideoId(videoEditModal.videoUrl) && (
+                <div className="p-2 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)] flex items-center gap-3">
+                  <div className="w-16 h-10 rounded-lg bg-black overflow-hidden relative shrink-0">
+                    <img
+                      src={getYouTubeThumbnailUrl(videoEditModal.videoUrl) || ""}
+                      alt="Thumbnail"
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                      <Play className="w-3 h-3 text-white fill-white" />
+                    </div>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] font-bold text-[var(--ink)] truncate">
+                      {videoEditModal.videoTitle || videoEditModal.taskName}
+                    </div>
+                    <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Valid YouTube Link Detected
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-between pt-2 border-t border-[var(--hairline)]">
+                {videoEditModal.videoUrl ? (
+                  <button
+                    onClick={() => {
+                      handleSaveVideoEdit(
+                        videoEditModal.dateStr,
+                        videoEditModal.taskId,
+                        "",
+                        ""
+                      );
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-rose-500/30 text-rose-500 hover:bg-rose-500/10 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Remove Video</span>
+                  </button>
+                ) : <div />}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setVideoEditModal(null)}
+                    className="px-3.5 py-1.5 rounded-xl surface-elevated border border-[var(--hairline)] font-semibold hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleSaveVideoEdit(
+                        videoEditModal.dateStr,
+                        videoEditModal.taskId,
+                        videoEditModal.videoUrl,
+                        videoEditModal.videoTitle
+                      );
+                    }}
+                    className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs shadow transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save Video</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: IN-APP VIDEO PLAYER (Ad-Shielding, Real-time Progress, Speed Controller) */}
+      {activeVideoModal && activeVideoModal.isOpen && (
+        <InAppVideoPlayer
+          videoUrl={activeVideoModal.videoUrl}
+          videoTitle={activeVideoModal.videoTitle}
+          taskName={activeVideoModal.taskName}
+          subjectName={activeVideoModal.subjectName}
+          isCompleted={activeVideoModal.isCompleted}
+          onToggleCompleted={() => {
+            handleToggleTask(activeVideoModal.dateStr, activeVideoModal.taskId);
+            setActiveVideoModal((prev) =>
+              prev ? { ...prev, isCompleted: !prev.isCompleted } : null
+            );
+          }}
+          onClose={() => setActiveVideoModal(null)}
+        />
+      )}
+
+      {/* MODAL: EMAIL 8-DIGIT OTP LOGIN */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div
+            className="surface-elevated max-w-md w-full rounded-3xl border border-[var(--hairline-strong)] p-6 space-y-4 shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 flex items-center justify-center shrink-0">
+                  <Key className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[var(--ink)]">
+                    {authOtpSent ? "Enter 8-Digit OTP" : "Cloud Sync Login"}
+                  </h3>
+                  <p className="text-xs text-[var(--muted)]">
+                    {authOtpSent ? "Enter the verification code sent to your email" : "Save and backup your plans securely in DB"}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowAuthModal(false);
+                  setAuthOtpSent(false);
+                  setAuthError("");
+                }}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Error banner */}
+            {authError && (
+              <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-semibold flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>{authError}</span>
+              </div>
+            )}
+
+            {!authOtpSent ? (
+              /* Step 1: Email Form */
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-[var(--ink)] flex items-center justify-between">
+                    <span>Your Email Address:</span>
+                    <span className="text-[10px] text-[var(--muted)] font-normal">Real 8-digit OTP will be sent</span>
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+                    <input
+                      type="email"
+                      placeholder="e.g. vansh@gmail.com"
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleSendAuthOtp()}
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 text-xs text-[var(--muted)] leading-relaxed">
+                  🔐 We use an <strong>8-digit one-time password</strong> sent to your email. No passwords to remember, instant cloud database sync, and easy share links across all devices.
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--hairline)]">
+                  <button
+                    type="button"
+                    onClick={() => setShowAuthModal(false)}
+                    className="px-4 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-semibold hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSendAuthOtp}
+                    disabled={authIsLoading || !authEmail.trim()}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{authIsLoading ? "Sending OTP..." : "Send 8-Digit OTP"}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Step 2: 8-digit OTP Verification */
+              <div className="space-y-4">
+                <div className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                  <span className="text-[var(--muted)]">
+                    Code sent to: <strong className="text-[var(--ink)]">{authEmail}</strong>
+                  </span>
+                  <button
+                    onClick={() => {
+                      setAuthOtpSent(false);
+                      setAuthOtp("");
+                      setAuthError("");
+                    }}
+                    className="text-[11px] font-bold text-[var(--accent)] hover:underline cursor-pointer"
+                  >
+                    Change Email
+                  </button>
+                </div>
+
+                {/* 8-Digit Code Input */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-[var(--ink)] flex items-center justify-between">
+                    <span>Enter 8-Digit Verification Code:</span>
+                    <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">8 Digits</span>
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={8}
+                    placeholder="12345678"
+                    value={authOtp}
+                    onChange={(e) => setAuthOtp(e.target.value.replace(/\D/g, ""))}
+                    onKeyDown={(e) => e.key === "Enter" && authOtp.length === 8 && handleVerifyAuthOtp()}
+                    className="w-full text-center text-xl font-mono font-bold tracking-[0.3em] p-3 rounded-xl bg-[var(--surface-2)] border-2 border-[var(--hairline-strong)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-[var(--hairline)]">
+                  <button
+                    type="button"
+                    onClick={handleSendAuthOtp}
+                    disabled={authIsLoading}
+                    className="text-xs text-[var(--muted)] hover:text-[var(--ink)] underline cursor-pointer"
+                  >
+                    Resend 8-Digit Code
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAuthModal(false)}
+                      className="px-3.5 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-semibold hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleVerifyAuthOtp}
+                      disabled={authIsLoading || authOtp.length !== 8}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>{authIsLoading ? "Verifying..." : "Verify & Sign In"}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: EASY SHARABILITY & CLOUD DB LINK */}
+      {showEasyShareModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div
+            className="surface-elevated max-w-lg w-full rounded-3xl border border-[var(--hairline-strong)] p-6 space-y-4 shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center shadow-sm">
+                  <Share className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[var(--ink)] flex items-center gap-2">
+                    <span>Easy Share Strategy</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                      Saved in DB ☁️
+                    </span>
+                  </h3>
+                  <p className="text-xs text-[var(--muted)]">
+                    Share your custom 12th board plan via short code, link, or WhatsApp!
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowEasyShareModal(false)}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              {/* Short Code Box */}
+              <div className="p-4 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)] space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[var(--muted)] uppercase tracking-wider text-[10px]">
+                    🔑 Strategy Short Code:
+                  </span>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                    1-Click Load for Friends
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2 bg-[var(--surface)] p-2.5 rounded-xl border border-[var(--hairline)]">
+                  <span className="font-mono text-base font-extrabold text-[var(--ink)] tracking-wider">
+                    {easyShortCode || "12TH-CBSE"}
+                  </span>
+                  <button
+                    onClick={() => {
+                      sfxClick();
+                      navigator.clipboard.writeText(easyShortCode);
+                      setCopiedShortCode(true);
+                      triggerToast("📋 Short Code copied! Friends can paste it in 'Copy Shared Plan'.");
+                      sfxSuccess();
+                      setTimeout(() => setCopiedShortCode(false), 2500);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-[var(--surface-2)] hover:bg-[var(--accent)] hover:text-white border border-[var(--hairline)] text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    {copiedShortCode ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedShortCode ? "Copied!" : "Copy Code"}</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-[var(--muted)]">
+                  Friends can click <strong>&quot;Copy Shared Plan&quot;</strong> and paste this code to load your exact schedule.
+                </p>
+              </div>
+
+              {/* Direct Universal Share URL */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-[var(--ink)] flex items-center justify-between">
+                  <span>Direct Sharable Link:</span>
+                  <span className="text-[10px] text-[var(--muted)]">Universal browser link</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={easyShareUrl}
+                    className="flex-1 p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] font-mono text-[11px] text-[var(--ink)] select-all truncate"
+                  />
+                  <button
+                    onClick={() => {
+                      sfxClick();
+                      navigator.clipboard.writeText(easyShareUrl);
+                      setCopiedShareUrl(true);
+                      triggerToast("🔗 Share Link copied to clipboard!");
+                      sfxSuccess();
+                      setTimeout(() => setCopiedShareUrl(false), 2500);
+                    }}
+                    className="px-3.5 py-2.5 rounded-xl bg-[var(--accent)] text-white text-xs font-bold shadow hover:opacity-90 transition-opacity flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    {copiedShareUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedShareUrl ? "Copied!" : "Copy Link"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 1-Click Social Sharing Actions */}
+              <div className="pt-2 border-t border-[var(--hairline)] space-y-2">
+                <div className="text-[11px] font-bold text-[var(--ink)]">1-Click Quick Share:</div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  <a
+                    href={getSocialShareLinks(plan, easyShareUrl, easyShortCode).whatsapp}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 font-bold text-center flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <span>💬 WhatsApp</span>
+                  </a>
+
+                  <a
+                    href={getSocialShareLinks(plan, easyShareUrl, easyShortCode).telegram}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2.5 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-500/20 font-bold text-center flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <span>✈️ Telegram</span>
+                  </a>
+
+                  <a
+                    href={getSocialShareLinks(plan, easyShareUrl, easyShortCode).email}
+                    className="p-2.5 rounded-xl surface-elevated hover:bg-[var(--surface-2)] border border-[var(--hairline)] font-bold text-center flex items-center justify-center gap-1.5 transition-colors col-span-2 sm:col-span-1"
+                  >
+                    <span>✉️ Email</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end pt-3 border-t border-[var(--hairline)]">
+              <button
+                onClick={() => setShowEasyShareModal(false)}
+                className="px-4 py-2 rounded-xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] text-xs font-bold transition-colors cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* UNIFIED SETTINGS & TOOLS MODAL */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div
+            className="surface-elevated max-w-lg w-full rounded-3xl border border-[var(--hairline-strong)] p-6 space-y-5 shadow-2xl relative max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-sm">
+                  <Settings className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[var(--ink)]">Strategy Settings</h3>
+                  <p className="text-xs text-[var(--muted)]">Manage cloud sync, accounts, and plan management tools</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Section 1: Account & Real-time Cloud Sync */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">Cloud &amp; Account</div>
+              <div className="p-3.5 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)] space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Cloud className="w-4 h-4 text-emerald-500" />
+                    <div>
+                      <div className="text-xs font-bold text-[var(--ink)]">
+                        {authUser ? authUser.displayName : "Guest User (Local Storage)"}
+                      </div>
+                      <div className="text-[11px] text-[var(--muted)]">
+                        {authUser ? authUser.email : "Log in with 8-digit Email OTP to save cross-device"}
+                      </div>
+                    </div>
+                  </div>
+                  {authUser ? (
+                    <button
+                      onClick={() => {
+                        handleLogout();
+                        setShowSettingsModal(false);
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl border border-rose-500/30 text-rose-500 hover:bg-rose-500/10 text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                    >
+                      <LogOut className="w-3 h-3" />
+                      <span>Log Out</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setShowSettingsModal(false);
+                        setShowAuthModal(true);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>Log In</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-[var(--hairline)] flex items-center justify-between text-[11px] text-[var(--muted)]">
+                  <span>Auto-Sync Status:</span>
+                  <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Active (Syncs on Every Action)</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Section 2: Strategy Generator Tools */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">Strategy Tools</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* AI Prompt Builder */}
+                <button
+                  onClick={() => {
+                    sfxClick();
+                    setShowSettingsModal(false);
+                    setShowAiPromptModal(true);
+                  }}
+                  className="p-3 rounded-2xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] hover:border-[var(--accent)] text-left transition-all flex items-start gap-2.5 cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Bot className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-[var(--ink)]">AI Prompt Builder</div>
+                    <div className="text-[11px] text-[var(--muted)]">Generate prompt for ChatGPT / Claude</div>
+                  </div>
+                </button>
+
+                {/* Copy Shared Plan */}
+                <button
+                  onClick={() => {
+                    sfxClick();
+                    setShowSettingsModal(false);
+                    setShowImportModal(true);
+                  }}
+                  className="p-3 rounded-2xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] hover:border-[var(--accent)] text-left transition-all flex items-start gap-2.5 cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Copy className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-[var(--ink)]">Copy Shared Plan</div>
+                    <div className="text-[11px] text-[var(--muted)]">Paste short code or JSON plan</div>
+                  </div>
+                </button>
+
+                {/* New Customized Strategy */}
+                <button
+                  onClick={() => {
+                    sfxClick();
+                    setShowSettingsModal(false);
+                    setShowNewPlanModal(true);
+                  }}
+                  className="p-3 rounded-2xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] hover:border-[var(--accent)] text-left transition-all flex items-start gap-2.5 cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <RefreshCw className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-[var(--ink)]">New Strategy Wizard</div>
+                    <div className="text-[11px] text-[var(--muted)]">Configure fresh dates &amp; subjects</div>
+                  </div>
+                </button>
+
+                {/* Clear All Tasks */}
+                <button
+                  onClick={() => {
+                    setShowSettingsModal(false);
+                    handleClearAllStrategyTasks();
+                  }}
+                  className="p-3 rounded-2xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] hover:border-amber-500/40 text-left transition-all flex items-start gap-2.5 cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Trash2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-[var(--ink)]">Clear All Tasks</div>
+                    <div className="text-[11px] text-[var(--muted)]">Make every date blank for scratch schedule</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+
+            {/* Section 3: Danger Zone */}
+            <div className="space-y-2 pt-2 border-t border-[var(--hairline)]">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-rose-500">Reset Options</div>
+              <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-rose-500/5 border border-rose-500/20">
+                <div>
+                  <div className="text-xs font-bold text-[var(--ink)]">Reset to Standard CBSE Plan</div>
+                  <div className="text-[11px] text-[var(--muted)]">Restore official Class 12th defaults</div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowSettingsModal(false);
+                    handleFullResetEntirePlan();
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-sm transition-all shrink-0 cursor-pointer"
+                >
+                  Reset Plan
+                </button>
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <div className="flex items-center justify-end pt-2 border-t border-[var(--hairline)]">
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="px-4 py-2 rounded-xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close Settings
               </button>
             </div>
           </div>

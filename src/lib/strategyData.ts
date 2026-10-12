@@ -41,6 +41,8 @@ export interface PlanChapterTask {
   estHours: number;
   completed: boolean;
   notes?: string;
+  videoUrl?: string; // YouTube video / lecture URL
+  videoTitle?: string; // Optional custom video lecture title
 }
 
 export interface PlanDay {
@@ -764,6 +766,40 @@ export function getTodayIso(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// Extract clean YouTube video ID from various URL formats
+export function extractYouTubeVideoId(url: string): string | null {
+  if (!url || typeof url !== "string") return null;
+  const clean = url.trim();
+  // Direct ID check (11 chars alphanumeric, dash, underscore)
+  if (/^[a-zA-Z0-9_-]{11}$/.test(clean)) return clean;
+  // youtu.be/ID
+  const shortMatch = clean.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+  if (shortMatch) return shortMatch[1];
+  // youtube.com/watch?v=ID or /embed/ID or /v/ID or /shorts/ID
+  const standardMatch = clean.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=))([a-zA-Z0-9_-]{11})/);
+  if (standardMatch) return standardMatch[1];
+  return null;
+}
+
+// Get YouTube high-quality thumbnail
+export function getYouTubeThumbnailUrl(urlOrId: string): string | null {
+  const id = extractYouTubeVideoId(urlOrId);
+  if (!id) return null;
+  return `https://img.youtube.com/vi/${id}/mqdefault.jpg`;
+}
+
+// Format seconds into MM:SS or HH:MM:SS
+export function formatVideoTime(seconds: number): string {
+  if (isNaN(seconds) || seconds < 0) return "0:00";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 // Calculate Backlog & Dynamic End Date Adjustment
 export interface BacklogAnalysis {
   backlogTasksCount: number;
@@ -1100,6 +1136,27 @@ export function saveSyllabusProgress(progress: Record<string, SyllabusProgressIt
   }
 }
 
+// Extract YouTube Video ID from any standard or short URL (youtube.com/watch?v=..., youtu.be/..., shorts/..., embed/...)
+export function extractYoutubeVideoId(url?: string): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  // Pattern covering standard watch, shorts, embed, youtu.be, etc.
+  const regExp = /(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
+  const match = trimmed.match(regExp);
+  if (match && match[1]) {
+    return match[1];
+  }
+
+  // If user simply pasted an 11-char ID
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  return null;
+}
+
 // Shareable Compression URL Helper: Serializes plan to a safe base64 URL string
 export function encodePlanToShareString(plan: StrategyPlan): string {
   try {
@@ -1121,6 +1178,7 @@ export function encodePlanToShareString(plan: StrategyPlan): string {
           p: tk.taskType,
           h: tk.estHours,
           m: tk.completed ? 1 : 0,
+          v: tk.videoUrl || undefined,
         })),
       })),
     };
@@ -1156,6 +1214,7 @@ export function decodePlanFromShareString(shareStr: string): StrategyPlan | null
           taskType: tk.p || "Theory",
           estHours: tk.h || 3,
           completed: tk.m === 1,
+          videoUrl: tk.v || undefined,
         };
       }),
     }));
