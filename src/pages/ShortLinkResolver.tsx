@@ -64,6 +64,14 @@ export function ShortLinkResolver() {
           // Zero-delay immediate forwarding
           window.location.replace(link.target_url);
         } else {
+          // If slug matches pattern of strategy short codes (e.g. 4-8 chars or 12TH-), route to strategy builder
+          const upperSlug = slug.toUpperCase();
+          if (upperSlug.startsWith("12TH-") || (slug.length >= 3 && slug.length <= 8 && !slug.includes("."))) {
+            const cleanCode = upperSlug.startsWith("12TH-") ? upperSlug : `12TH-${upperSlug}`;
+            navigate(`/apps/strategy-builder?code=${cleanCode}`, { replace: true });
+            return;
+          }
+
           setNotFound(true);
           setLoading(false);
         }

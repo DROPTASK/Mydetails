@@ -252,6 +252,47 @@ export function StrategyBuilder() {
   const [codeToLoad, setCodeToLoad] = useState("");
   const [isLoadingCode, setIsLoadingCode] = useState(false);
 
+  // Sync ref with authUser so async callbacks and debounce timers never see stale null
+  const authUserRef = useRef<AuthUser | null>(authUser);
+  useEffect(() => {
+    authUserRef.current = authUser;
+  }, [authUser]);
+
+  // Set and persist plan locally without triggering an auto-sync back mutation to Cloud DB
+  const applyLoadedPlan = (loadedPlan: StrategyPlan, shortCode?: string, shareUrl?: string) => {
+    setPlan(loadedPlan);
+    saveStrategyPlan(loadedPlan);
+    if (shortCode) {
+      setEasyShortCode(shortCode);
+    }
+    if (shareUrl) {
+      setEasyShareUrl(shareUrl);
+    }
+  };
+
+  // Sync user mutations to localStorage and debounce auto-sync to Cloud DB on user action
+  const updatePlan = (newPlan: StrategyPlan) => {
+    setPlan(newPlan);
+    saveStrategyPlan(newPlan);
+
+    // Auto-sync to DB in background
+    if (autoSyncDebounceRef.current) {
+      clearTimeout(autoSyncDebounceRef.current);
+    }
+    setDbSyncStatus("saving");
+    autoSyncDebounceRef.current = setTimeout(async () => {
+      try {
+        const userEmail = authUserRef.current?.email || "guest@vanshkumar.in";
+        const res = await saveStrategyToCloudDb(newPlan, userEmail);
+        setEasyShareUrl(res.shareUrl);
+        setEasyShortCode(res.shortCode);
+        setDbSyncStatus("synced");
+      } catch {
+        setDbSyncStatus("offline");
+      }
+    }, 600);
+  };
+
   // Auto-load plan from URL query param (?code= or ?plan=) or from authenticated user's Cloud DB
   useEffect(() => {
     const codeParam = searchParams.get("code") || searchParams.get("cloudPlan");
@@ -262,11 +303,10 @@ export function StrategyBuilder() {
       loadStrategyFromCloud(codeParam).then((loaded) => {
         setIsLoadingCode(false);
         if (loaded) {
-          updatePlan(loaded);
           const upper = codeParam.toUpperCase();
           const cleanCode = upper.startsWith("12TH-") ? upper : upper.length <= 6 ? `12TH-${upper}` : upper;
-          setEasyShortCode(cleanCode);
-          setEasyShareUrl(`${window.location.origin}/apps/strategy-builder?code=${cleanCode}`);
+          const shareUrl = `${window.location.origin}/apps/strategy-builder?code=${cleanCode}`;
+          applyLoadedPlan(loaded, cleanCode, shareUrl);
           triggerToast(`✅ Loaded Shared Plan: "${loaded.title}"!`);
           sfxSuccess();
         } else {
@@ -276,7 +316,7 @@ export function StrategyBuilder() {
     } else if (planParam) {
       const decoded = decodePlanFromShareString(planParam);
       if (decoded) {
-        updatePlan(decoded);
+        applyLoadedPlan(decoded);
         triggerToast(`✅ Loaded Shared Plan: "${decoded.title}"!`);
         sfxSuccess();
       }
@@ -284,14 +324,12 @@ export function StrategyBuilder() {
       // User is logged in on this device - fetch their latest cloud plan from DB!
       fetchUserLatestPlanFromCloud(authUser.email).then((cloudRec) => {
         if (cloudRec && cloudRec.planData) {
-          updatePlan(cloudRec.planData);
-          setEasyShareUrl(cloudRec.shareUrl);
-          setEasyShortCode(cloudRec.shortCode);
+          applyLoadedPlan(cloudRec.planData, cloudRec.shortCode, cloudRec.shareUrl);
           triggerToast(`☁️ Synced latest plan for ${authUser.email}!`);
         }
       });
     }
-  }, [searchParams]);
+  }, [searchParams, authUser?.email]);
 
   // Load a plan explicitly using Short Code or URL
   const handleLoadByCode = async (explicitCode?: string) => {
@@ -305,11 +343,10 @@ export function StrategyBuilder() {
     try {
       const loaded = await loadStrategyFromCloud(targetCode);
       if (loaded) {
-        updatePlan(loaded);
         const upper = targetCode.toUpperCase();
         const cleanCode = upper.startsWith("12TH-") ? upper : upper.length <= 6 ? `12TH-${upper}` : upper;
-        setEasyShortCode(cleanCode);
-        setEasyShareUrl(`${window.location.origin}/apps/strategy-builder?code=${cleanCode}`);
+        const shareUrl = `${window.location.origin}/apps/strategy-builder?code=${cleanCode}`;
+        applyLoadedPlan(loaded, cleanCode, shareUrl);
         setShowSettingsModal(false);
         setShowEasyShareModal(false);
         setShowImportModal(false);
@@ -356,15 +393,14 @@ export function StrategyBuilder() {
       const res = verifyEmailOtp(authEmail, authOtp);
       if (res.success && res.user) {
         setAuthUser(res.user);
+        authUserRef.current = res.user;
         setShowAuthModal(false);
         sfxSuccess();
 
         // 1. Fetch user's existing saved plan from Supabase DB so other devices load their existing work!
         const existingCloudPlan = await fetchUserLatestPlanFromCloud(res.user.email);
         if (existingCloudPlan && existingCloudPlan.planData) {
-          updatePlan(existingCloudPlan.planData);
-          setEasyShareUrl(existingCloudPlan.shareUrl);
-          setEasyShortCode(existingCloudPlan.shortCode);
+          applyLoadedPlan(existingCloudPlan.planData, existingCloudPlan.shortCode, existingCloudPlan.shareUrl);
           triggerToast(`🎉 Welcome back, ${res.user.displayName}! Loaded your cloud plan from Supabase DB.`);
         } else {
           // 2. New user account: save current active plan to DB
@@ -572,43 +608,6 @@ export function StrategyBuilder() {
       },
       false
     );
-  };
-
-  // Check URL query parameters for shared plan on mount
-  useEffect(() => {
-    const sharedParam = searchParams.get("shared") || searchParams.get("plan");
-    if (sharedParam) {
-      const decoded = decodePlanFromShareString(sharedParam);
-      if (decoded) {
-        setPlan(decoded);
-        saveStrategyPlan(decoded);
-        triggerToast("🎉 Shared Class 12th Plan loaded successfully!");
-        sfxSuccess();
-      }
-    }
-  }, [searchParams]);
-
-  // Sync plan changes to localStorage and automatically to Cloud DB on every action
-  const updatePlan = (newPlan: StrategyPlan) => {
-    setPlan(newPlan);
-    saveStrategyPlan(newPlan);
-
-    // Auto-sync to DB in background
-    if (autoSyncDebounceRef.current) {
-      clearTimeout(autoSyncDebounceRef.current);
-    }
-    setDbSyncStatus("saving");
-    autoSyncDebounceRef.current = setTimeout(async () => {
-      try {
-        const userEmail = authUser?.email || "guest@vanshkumar.in";
-        const res = await saveStrategyToCloudDb(newPlan, userEmail);
-        setEasyShareUrl(res.shareUrl);
-        setEasyShortCode(res.shortCode);
-        setDbSyncStatus("synced");
-      } catch {
-        setDbSyncStatus("offline");
-      }
-    }, 800);
   };
 
   // Backlog and Attendance Metrics calculation
@@ -959,11 +958,10 @@ export function StrategyBuilder() {
     try {
       const fromCloud = await loadStrategyFromCloud(trimmed);
       if (fromCloud) {
-        updatePlan(fromCloud);
         const upper = trimmed.toUpperCase();
         const codeClean = upper.startsWith("12TH-") ? upper : upper.length <= 6 ? `12TH-${upper}` : upper;
-        setEasyShortCode(codeClean);
-        setEasyShareUrl(`${window.location.origin}/apps/strategy-builder?code=${codeClean}`);
+        const shareUrl = `${window.location.origin}/apps/strategy-builder?code=${codeClean}`;
+        applyLoadedPlan(fromCloud, codeClean, shareUrl);
         setShowImportModal(false);
         setImportText("");
         triggerToast(`✅ Loaded Strategy Plan from Cloud DB: "${fromCloud.title}"!`);
@@ -1002,7 +1000,7 @@ export function StrategyBuilder() {
     }
 
     if (decoded) {
-      updatePlan(decoded);
+      applyLoadedPlan(decoded);
       setShowImportModal(false);
       setImportText("");
       triggerToast("✅ Strategy Plan imported and loaded successfully!");

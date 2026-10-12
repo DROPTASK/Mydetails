@@ -65,11 +65,11 @@ export async function saveStrategyToCloudDb(
   const localRecords = getLocalCloudPlans();
   const cleanEmail = userEmail.trim().toLowerCase();
 
-  // If user is authenticated, check if they already have an existing plan short_code in DB or local
-  let shortCode = localRecords[plan.id]?.shortCode;
+  // If user is authenticated, check if they already have an existing plan short_code in DB
+  let shortCode = "";
   let planId = plan.id;
 
-  if (!shortCode && isSupabaseConfigured && cleanEmail && !cleanEmail.startsWith("guest@")) {
+  if (isSupabaseConfigured && cleanEmail && !cleanEmail.startsWith("guest@")) {
     try {
       const { data: existingUserPlan } = await supabase
         .from("strategy_plans")
@@ -88,6 +88,11 @@ export async function saveStrategyToCloudDb(
     } catch {
       // Continue
     }
+  }
+
+  // Fallback to local cache by plan.id
+  if (!shortCode) {
+    shortCode = localRecords[plan.id]?.shortCode || "";
   }
 
   if (!shortCode) {
