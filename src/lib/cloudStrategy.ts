@@ -49,27 +49,41 @@ function generateShortCode(): string {
 }
 
 /**
- * Saves a Strategy Plan to Cloud DB and generates universal instant share link
+ * Saves a Strategy Plan to Cloud DB table and generates universal instant share link.
+ * Non-logged-in users are NOT permitted to save to the database table/columns.
+ * Only authenticated accounts can write/save data to the database table.
  */
 export async function saveStrategyToCloudDb(
   plan: StrategyPlan,
-  userEmail: string = "guest@vanshkumar.in"
+  userEmail?: string | null
 ): Promise<{
   success: boolean;
-  record: CloudPlanRecord;
-  shareUrl: string;
-  shortCode: string;
+  record?: CloudPlanRecord;
+  shareUrl?: string;
+  shortCode?: string;
   isDatabaseSynced: boolean;
+  requiresAuth?: boolean;
   message: string;
 }> {
+  const cleanEmail = (userEmail || "").trim().toLowerCase();
+
+  // NON-LOGIN: Not allowed to use table and column for saving data!
+  if (!cleanEmail || cleanEmail.startsWith("guest@") || !cleanEmail.includes("@")) {
+    return {
+      success: false,
+      isDatabaseSynced: false,
+      requiresAuth: true,
+      message: "Non-logged-in users cannot save to the database table. Please sign in or create an account to sync your plan.",
+    };
+  }
+
   const localRecords = getLocalCloudPlans();
-  const cleanEmail = userEmail.trim().toLowerCase();
 
   // If user is authenticated, check if they already have an existing plan short_code in DB
   let shortCode = "";
   let planId = plan.id;
 
-  if (isSupabaseConfigured && cleanEmail && !cleanEmail.startsWith("guest@")) {
+  if (isSupabaseConfigured) {
     try {
       const { data: existingUserPlan } = await supabase
         .from("strategy_plans")
@@ -126,11 +140,11 @@ export async function saveStrategyToCloudDb(
   localRecords[shortCode] = record;
   saveLocalCloudPlans(localRecords);
 
-  // 2. Try saving to Supabase if configured
+  // 2. Direct communication with database: save directly to strategy_plans table columns
   let isDatabaseSynced = false;
   if (isSupabaseConfigured) {
     try {
-      // Primary: Save directly into strategy_plans table
+      // Primary: Save directly into strategy_plans table columns
       const { error: planDbError } = await supabase.from("strategy_plans").upsert(
         {
           id: planId,
@@ -165,20 +179,35 @@ export async function saveStrategyToCloudDb(
         },
         { onConflict: "slug" }
       );
+
+      // Also register short slug without 12TH- prefix (e.g. /t5qv)
+      const rawSlug = shortCode.replace(/^12TH-/i, "").toLowerCase();
+      if (rawSlug && rawSlug !== shortCode.toLowerCase()) {
+        await supabase.from("short_links").upsert(
+          {
+            slug: rawSlug,
+            target_url: shareUrl,
+            title: `Class 12th Plan: ${plan.title} (${plan.studentName})`,
+            description: `Study Strategy for ${plan.studentName}`,
+            add_to_links: false,
+          },
+          { onConflict: "slug" }
+        );
+      }
     } catch (e) {
-      console.warn("Supabase table fallback:", e);
+      console.warn("Supabase table error:", e);
     }
   }
 
   return {
-    success: true,
+    success: isDatabaseSynced,
     record,
     shareUrl,
     shortCode,
     isDatabaseSynced,
     message: isDatabaseSynced
-      ? "Plan saved to Supabase Cloud Database and synced!"
-      : "Plan saved to Cloud Workspace and ready for easy sharing!",
+      ? "Plan saved directly to Cloud Database table and synced!"
+      : "Saved locally. Database table requires active network.",
   };
 }
 

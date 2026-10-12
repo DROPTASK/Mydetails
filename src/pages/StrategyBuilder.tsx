@@ -283,13 +283,20 @@ export function StrategyBuilder() {
   };
 
   // Sync user mutations to localStorage and debounce auto-sync to Cloud DB on user action.
-  // ONLY sends data to DB when user makes an actual change (never during login!).
+  // ONLY sends data to DB when user is logged in AND makes an actual change (never during login!).
   const updatePlan = (newPlan: StrategyPlan) => {
     setPlan(newPlan);
     saveStrategyPlan(newPlan);
 
     // CRITICAL: When user is logging in, do NOT send data from browser to DB!
     if (isLoggingInRef.current) {
+      return;
+    }
+
+    // NON-LOGIN: Not allowed to use table and column for saving data!
+    const activeEmail = authUserRef.current?.email;
+    if (!activeEmail || activeEmail.startsWith("guest@") || !activeEmail.includes("@")) {
+      setDbSyncStatus("offline");
       return;
     }
 
@@ -300,11 +307,17 @@ export function StrategyBuilder() {
     setDbSyncStatus("saving");
     autoSyncDebounceRef.current = setTimeout(async () => {
       try {
-        const userEmail = authUserRef.current?.email || "guest@vanshkumar.in";
+        const userEmail = authUserRef.current?.email;
+        if (!userEmail || userEmail.startsWith("guest@")) return;
+
         const res = await saveStrategyToCloudDb(newPlan, userEmail);
-        setEasyShareUrl(res.shareUrl);
-        setEasyShortCode(res.shortCode);
-        setDbSyncStatus("synced");
+        if (res.success && res.shareUrl && res.shortCode) {
+          setEasyShareUrl(res.shareUrl);
+          setEasyShortCode(res.shortCode);
+          setDbSyncStatus("synced");
+        } else {
+          setDbSyncStatus("offline");
+        }
       } catch {
         setDbSyncStatus("offline");
       }
@@ -500,40 +513,58 @@ export function StrategyBuilder() {
     triggerToast("Logged out from cloud sync.");
   };
 
-  // Save Now in DB button action
+  // Save Now in DB button action (Only authenticated users can write to DB table)
   const handleSaveNowToDb = async () => {
     sfxClick();
-    if (!authUser) {
+    if (!authUser || !authUser.email || authUser.email.startsWith("guest@")) {
       setShowAuthModal(true);
-      triggerToast("🔐 Please enter your email to receive an 8-digit OTP and save in DB.");
+      triggerToast("🔐 Please sign in or create an account to save data directly to the Cloud DB.");
       return;
     }
 
     setIsSavingToDb(true);
     try {
       const res = await saveStrategyToCloudDb(plan, authUser.email);
-      setEasyShareUrl(res.shareUrl);
-      setEasyShortCode(res.shortCode);
-      setShowEasyShareModal(true);
-      triggerToast(`☁️ Saved to Cloud DB! Code: ${res.shortCode}`);
-      sfxSuccess();
+      if (res.success && res.shareUrl && res.shortCode) {
+        setEasyShareUrl(res.shareUrl);
+        setEasyShortCode(res.shortCode);
+        setDbSyncStatus("synced");
+        setShowEasyShareModal(true);
+        triggerToast(`☁️ Saved to Cloud DB! Code: ${res.shortCode}`);
+        sfxSuccess();
+      } else {
+        triggerToast(res.message || "Failed to save to database. Please try again.");
+      }
     } catch {
-      triggerToast("Failed to save to database. Please try again.");
+      triggerToast("Failed to save to database. Please check connection.");
     } finally {
       setIsSavingToDb(false);
     }
   };
 
-  // Open Easy Share Modal
+  // Open Easy Share Modal (Only authenticated users can create DB share link/code)
   const handleOpenEasyShare = async () => {
     sfxClick();
+    if (!authUser || !authUser.email || authUser.email.startsWith("guest@")) {
+      setShowAuthModal(true);
+      triggerToast("🔐 Sign in or create an account to save your plan and generate a share code.");
+      return;
+    }
+
     setIsSavingToDb(true);
     try {
-      const email = authUser?.email || "guest@vanshkumar.in";
-      const res = await saveStrategyToCloudDb(plan, email);
-      setEasyShareUrl(res.shareUrl);
-      setEasyShortCode(res.shortCode);
-      setShowEasyShareModal(true);
+      const res = await saveStrategyToCloudDb(plan, authUser.email);
+      if (res.shareUrl && res.shortCode) {
+        setEasyShareUrl(res.shareUrl);
+        setEasyShortCode(res.shortCode);
+        setDbSyncStatus("synced");
+        setShowEasyShareModal(true);
+        sfxSuccess();
+      } else {
+        triggerToast(res.message || "Failed to generate share link.");
+      }
+    } catch {
+      triggerToast("Error saving to database for sharing.");
     } finally {
       setIsSavingToDb(false);
     }
@@ -1075,10 +1106,11 @@ export function StrategyBuilder() {
     }
 
     if (decoded) {
-      applyLoadedPlan(decoded);
+      // Apply and sync newly loaded plan to DB for logged-in accounts
+      updatePlan(decoded);
       setShowImportModal(false);
       setImportText("");
-      triggerToast("✅ Strategy Plan imported and loaded successfully!");
+      triggerToast("✅ Strategy Plan loaded successfully!");
       sfxSuccess();
     } else {
       setImportError("Could not recognize this plan. Ensure you entered a valid 4-6 digit short code (e.g. 12TH-T5QV), share URL, or JSON.");
@@ -4388,18 +4420,25 @@ export function StrategyBuilder() {
                 </div>
 
                 <div className="pt-2 border-t border-[var(--hairline)] flex items-center justify-between text-[11px] text-[var(--muted)]">
-                  <span>Auto-Sync Status:</span>
+                  <span>Cloud DB Sync:</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span>{dbSyncStatus === "saving" ? "Syncing..." : "Active (Every Action)"}</span>
-                    </span>
+                    {authUser ? (
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>{dbSyncStatus === "saving" ? "Syncing..." : "Active (DB Table)"}</span>
+                      </span>
+                    ) : (
+                      <span className="font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-amber-500" />
+                        <span>Disabled (Sign In Required)</span>
+                      </span>
+                    )}
                     <button
                       onClick={handleSaveNowToDb}
                       disabled={isSavingToDb}
                       className="px-2 py-0.5 rounded-md surface-elevated border border-[var(--hairline)] hover:bg-[var(--surface-2)] text-[10px] font-bold text-[var(--ink)] cursor-pointer transition-colors"
                     >
-                      {isSavingToDb ? "Saving..." : "Sync Now"}
+                      {isSavingToDb ? "Saving..." : authUser ? "Sync Now" : "Sign In & Sync"}
                     </button>
                   </div>
                 </div>
