@@ -53,6 +53,10 @@ import {
   Share,
   Settings,
   Loader2,
+  Eye,
+  EyeOff,
+  Lock,
+  UserPlus,
 } from "lucide-react";
 import {
   CBSE_12TH_SUBJECTS,
@@ -89,6 +93,9 @@ import {
   getCurrentAuthUser,
   requestEmailOtp,
   verifyEmailOtp,
+  registerWithPassword,
+  loginWithPassword,
+  setPasswordForUser,
   logoutAuthUser,
   AuthUser,
 } from "../lib/authOtp";
@@ -230,14 +237,19 @@ export function StrategyBuilder() {
     };
   }, []);
 
-  // Auth User State (Email OTP 8-digit)
+  // Auth User State (Email OTP 8-digit & Password)
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => getCurrentAuthUser());
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register" | "otp">("login");
   const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [authOtp, setAuthOtp] = useState("");
   const [authOtpSent, setAuthOtpSent] = useState(false);
   const [authIsLoading, setAuthIsLoading] = useState(false);
   const [authError, setAuthError] = useState("");
+  const isLoggingInRef = useRef(false);
 
   // Cloud DB Save & Easy Sharing State
   const [isSavingToDb, setIsSavingToDb] = useState(false);
@@ -270,12 +282,18 @@ export function StrategyBuilder() {
     }
   };
 
-  // Sync user mutations to localStorage and debounce auto-sync to Cloud DB on user action
+  // Sync user mutations to localStorage and debounce auto-sync to Cloud DB on user action.
+  // ONLY sends data to DB when user makes an actual change (never during login!).
   const updatePlan = (newPlan: StrategyPlan) => {
     setPlan(newPlan);
     saveStrategyPlan(newPlan);
 
-    // Auto-sync to DB in background
+    // CRITICAL: When user is logging in, do NOT send data from browser to DB!
+    if (isLoggingInRef.current) {
+      return;
+    }
+
+    // Auto-sync to DB in background on any user change
     if (autoSyncDebounceRef.current) {
       clearTimeout(autoSyncDebounceRef.current);
     }
@@ -321,12 +339,17 @@ export function StrategyBuilder() {
         sfxSuccess();
       }
     } else if (authUser?.email) {
-      // User is logged in on this device - fetch their latest cloud plan from DB!
+      // User is logged in on this device - ONLY RECEIVE from DB! NO data sending!
+      isLoggingInRef.current = true;
       fetchUserLatestPlanFromCloud(authUser.email).then((cloudRec) => {
         if (cloudRec && cloudRec.planData) {
           applyLoadedPlan(cloudRec.planData, cloudRec.shortCode, cloudRec.shareUrl);
           triggerToast(`☁️ Synced latest plan for ${authUser.email}!`);
         }
+      }).finally(() => {
+        setTimeout(() => {
+          isLoggingInRef.current = false;
+        }, 500);
       });
     }
   }, [searchParams, authUser?.email]);
@@ -363,7 +386,73 @@ export function StrategyBuilder() {
     }
   };
 
-  // Request 8-digit OTP
+  // Helper: Post-Auth Success with NO outbound data sending, ONLY receiving!
+  const handlePostAuthSuccess = async (user: AuthUser, welcomeMsg?: string) => {
+    isLoggingInRef.current = true;
+    setAuthUser(user);
+    authUserRef.current = user;
+    setShowAuthModal(false);
+    setAuthPassword("");
+    setAuthOtp("");
+    setAuthOtpSent(false);
+    sfxSuccess();
+
+    try {
+      // User logins: NO data sending, ONLY receiving from DB!
+      const existingCloudPlan = await fetchUserLatestPlanFromCloud(user.email);
+      if (existingCloudPlan && existingCloudPlan.planData) {
+        applyLoadedPlan(existingCloudPlan.planData, existingCloudPlan.shortCode, existingCloudPlan.shareUrl);
+        triggerToast(`🎉 Welcome back, ${user.displayName}! Loaded your cloud plan from database.`);
+      } else {
+        // First-time user with no cloud plan: DO NOT send data to DB during login!
+        triggerToast(welcomeMsg || `🎉 Welcome, ${user.displayName}! Signed in.`);
+      }
+    } finally {
+      setTimeout(() => {
+        isLoggingInRef.current = false;
+      }, 500);
+    }
+  };
+
+  // 1. Password Login
+  const handlePasswordLogin = async () => {
+    sfxClick();
+    setAuthError("");
+    setAuthIsLoading(true);
+    try {
+      const res = await loginWithPassword(authEmail, authPassword);
+      if (res.success && res.user) {
+        await handlePostAuthSuccess(res.user);
+      } else {
+        setAuthError(res.error || "Login failed. Please check credentials.");
+      }
+    } catch (e: any) {
+      setAuthError(e?.message || "Login failed.");
+    } finally {
+      setAuthIsLoading(false);
+    }
+  };
+
+  // 2. Password Account Creation / Registration
+  const handlePasswordRegister = async () => {
+    sfxClick();
+    setAuthError("");
+    setAuthIsLoading(true);
+    try {
+      const res = await registerWithPassword(authEmail, authPassword, authDisplayName);
+      if (res.success && res.user) {
+        await handlePostAuthSuccess(res.user, `🎉 Welcome, ${res.user.displayName}! Account created.`);
+      } else {
+        setAuthError(res.error || "Failed to create account.");
+      }
+    } catch (e: any) {
+      setAuthError(e?.message || "Failed to create account.");
+    } finally {
+      setAuthIsLoading(false);
+    }
+  };
+
+  // 3. Request 8-digit OTP
   const handleSendAuthOtp = async () => {
     sfxClick();
     setAuthError("");
@@ -384,34 +473,20 @@ export function StrategyBuilder() {
     }
   };
 
-  // Verify 8-digit OTP
+  // 4. Verify 8-digit OTP
   const handleVerifyAuthOtp = async () => {
     sfxClick();
     setAuthError("");
     setAuthIsLoading(true);
     try {
-      const res = verifyEmailOtp(authEmail, authOtp);
+      const res = await verifyEmailOtp(authEmail, authOtp);
       if (res.success && res.user) {
-        setAuthUser(res.user);
-        authUserRef.current = res.user;
-        setShowAuthModal(false);
-        sfxSuccess();
-
-        // 1. Fetch user's existing saved plan from Supabase DB so other devices load their existing work!
-        const existingCloudPlan = await fetchUserLatestPlanFromCloud(res.user.email);
-        if (existingCloudPlan && existingCloudPlan.planData) {
-          applyLoadedPlan(existingCloudPlan.planData, existingCloudPlan.shortCode, existingCloudPlan.shareUrl);
-          triggerToast(`🎉 Welcome back, ${res.user.displayName}! Loaded your cloud plan from Supabase DB.`);
-        } else {
-          // 2. New user account: save current active plan to DB
-          const saved = await saveStrategyToCloudDb(plan, res.user.email);
-          setEasyShareUrl(saved.shareUrl);
-          setEasyShortCode(saved.shortCode);
-          triggerToast(`🎉 Welcome, ${res.user.displayName}! Signed in and synced to Cloud DB.`);
-        }
+        await handlePostAuthSuccess(res.user);
       } else {
         setAuthError(res.error || "Incorrect 8-digit code. Please check and try again.");
       }
+    } catch {
+      setAuthError("Verification failed.");
     } finally {
       setAuthIsLoading(false);
     }
@@ -3685,7 +3760,7 @@ export function StrategyBuilder() {
         />
       )}
 
-      {/* MODAL: EMAIL 8-DIGIT OTP LOGIN */}
+      {/* MODAL: AUTHENTICATION (PASSWORD LOGIN, ACCOUNT CREATION & 8-DIGIT OTP) */}
       {showAuthModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div
@@ -3696,14 +3771,30 @@ export function StrategyBuilder() {
             <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20 flex items-center justify-center shrink-0">
-                  <Key className="w-5 h-5" />
+                  {authMode === "register" ? (
+                    <UserPlus className="w-5 h-5" />
+                  ) : authMode === "otp" ? (
+                    <Key className="w-5 h-5" />
+                  ) : (
+                    <Lock className="w-5 h-5" />
+                  )}
                 </div>
                 <div>
                   <h3 className="font-bold text-base text-[var(--ink)]">
-                    {authOtpSent ? "Enter 8-Digit OTP" : "Cloud Sync Login"}
+                    {authMode === "register"
+                      ? "Create Cloud Account"
+                      : authMode === "otp"
+                      ? authOtpSent
+                        ? "Enter 8-Digit OTP"
+                        : "Email OTP Verification"
+                      : "Cloud Account Login"}
                   </h3>
                   <p className="text-xs text-[var(--muted)]">
-                    {authOtpSent ? "Enter the verification code sent to your email" : "Save and backup your plans securely in DB"}
+                    {authMode === "register"
+                      ? "Set a password to log in & sync across all devices"
+                      : authMode === "otp"
+                      ? "One-time code delivered directly to your inbox"
+                      : "Sign in with your email & password"}
                   </p>
                 </div>
               </div>
@@ -3712,10 +3803,57 @@ export function StrategyBuilder() {
                   setShowAuthModal(false);
                   setAuthOtpSent(false);
                   setAuthError("");
+                  setAuthPassword("");
                 }}
                 className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
               >
                 ✕
+              </button>
+            </div>
+
+            {/* Mode Switcher Tabs */}
+            <div className="grid grid-cols-3 p-1 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("login");
+                  setAuthError("");
+                }}
+                className={`py-1.5 rounded-xl transition-all cursor-pointer ${
+                  authMode === "login"
+                    ? "bg-[var(--surface-elevated)] text-[var(--ink)] shadow-sm font-bold"
+                    : "text-[var(--muted)] hover:text-[var(--ink)]"
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("register");
+                  setAuthError("");
+                }}
+                className={`py-1.5 rounded-xl transition-all cursor-pointer ${
+                  authMode === "register"
+                    ? "bg-[var(--surface-elevated)] text-[var(--ink)] shadow-sm font-bold"
+                    : "text-[var(--muted)] hover:text-[var(--ink)]"
+                }`}
+              >
+                Sign Up
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode("otp");
+                  setAuthError("");
+                }}
+                className={`py-1.5 rounded-xl transition-all cursor-pointer ${
+                  authMode === "otp"
+                    ? "bg-[var(--surface-elevated)] text-[var(--ink)] shadow-sm font-bold"
+                    : "text-[var(--muted)] hover:text-[var(--ink)]"
+                }`}
+              >
+                8-Digit OTP
               </button>
             </div>
 
@@ -3727,99 +3865,79 @@ export function StrategyBuilder() {
               </div>
             )}
 
-            {!authOtpSent ? (
-              /* Step 1: Email Form */
-              <div className="space-y-4">
+            {/* TAB 1: PASSWORD LOGIN */}
+            {authMode === "login" && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handlePasswordLogin();
+                }}
+                className="space-y-3.5"
+              >
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-[var(--ink)] flex items-center justify-between">
-                    <span>Your Email Address:</span>
-                    <span className="text-[10px] text-[var(--muted)] font-normal">Real 8-digit OTP will be sent</span>
-                  </label>
+                  <label className="text-xs font-bold text-[var(--ink)]">Email Address:</label>
                   <div className="relative">
                     <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
                     <input
                       type="email"
-                      placeholder="e.g. vansh@gmail.com"
+                      required
+                      placeholder="e.g. akash@gmail.com"
                       value={authEmail}
                       onChange={(e) => setAuthEmail(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleSendAuthOtp()}
                       className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
                       autoFocus
                     />
                   </div>
                 </div>
 
-                <div className="p-3 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 text-xs text-[var(--muted)] leading-relaxed">
-                  🔐 We use an <strong>8-digit one-time password</strong> sent to your email. No passwords to remember, instant cloud database sync, and easy share links across all devices.
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--hairline)]">
-                  <button
-                    type="button"
-                    onClick={() => setShowAuthModal(false)}
-                    className="px-4 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-semibold hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSendAuthOtp}
-                    disabled={authIsLoading || !authEmail.trim()}
-                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>{authIsLoading ? "Sending OTP..." : "Send 8-Digit OTP"}</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* Step 2: 8-digit OTP Verification */
-              <div className="space-y-4">
-                <div className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
-                  <span className="text-[var(--muted)]">
-                    Code sent to: <strong className="text-[var(--ink)]">{authEmail}</strong>
-                  </span>
-                  <button
-                    onClick={() => {
-                      setAuthOtpSent(false);
-                      setAuthOtp("");
-                      setAuthError("");
-                    }}
-                    className="text-[11px] font-bold text-[var(--accent)] hover:underline cursor-pointer"
-                  >
-                    Change Email
-                  </button>
-                </div>
-
-                {/* 8-Digit Code Input */}
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-[var(--ink)] flex items-center justify-between">
-                    <span>Enter 8-Digit Verification Code:</span>
-                    <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">8 Digits</span>
-                  </label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={8}
-                    placeholder="12345678"
-                    value={authOtp}
-                    onChange={(e) => setAuthOtp(e.target.value.replace(/\D/g, ""))}
-                    onKeyDown={(e) => e.key === "Enter" && authOtp.length === 8 && handleVerifyAuthOtp()}
-                    className="w-full text-center text-xl font-mono font-bold tracking-[0.3em] p-3 rounded-xl bg-[var(--surface-2)] border-2 border-[var(--hairline-strong)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
-                    autoFocus
-                  />
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-[var(--ink)]">Password:</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("otp");
+                        setAuthError("");
+                      }}
+                      className="text-[11px] text-[var(--accent)] hover:underline cursor-pointer"
+                    >
+                      Forgot / Use OTP
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      placeholder="Enter your password"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      className="w-full pl-9 pr-10 py-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 border-t border-[var(--hairline)]">
-                  <button
-                    type="button"
-                    onClick={handleSendAuthOtp}
-                    disabled={authIsLoading}
-                    className="text-xs text-[var(--muted)] hover:text-[var(--ink)] underline cursor-pointer"
-                  >
-                    Resend 8-Digit Code
-                  </button>
-
+                <div className="pt-2 flex items-center justify-between border-t border-[var(--hairline)]">
+                  <span className="text-[11px] text-[var(--muted)]">
+                    New user?{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("register");
+                        setAuthError("");
+                      }}
+                      className="text-[var(--accent)] font-bold hover:underline cursor-pointer"
+                    >
+                      Create Account
+                    </button>
+                  </span>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -3829,16 +3947,231 @@ export function StrategyBuilder() {
                       Cancel
                     </button>
                     <button
-                      type="button"
-                      onClick={handleVerifyAuthOtp}
-                      disabled={authIsLoading || authOtp.length !== 8}
+                      type="submit"
+                      disabled={authIsLoading || !authEmail.trim() || !authPassword}
                       className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>{authIsLoading ? "Verifying..." : "Verify & Sign In"}</span>
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>{authIsLoading ? "Signing In..." : "Sign In"}</span>
                     </button>
                   </div>
                 </div>
+              </form>
+            )}
+
+            {/* TAB 2: PASSWORD REGISTRATION / ACCOUNT CREATION */}
+            {authMode === "register" && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handlePasswordRegister();
+                }}
+                className="space-y-3.5"
+              >
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-[var(--ink)]">Student Name (Optional):</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Akash Kumar"
+                    value={authDisplayName}
+                    onChange={(e) => setAuthDisplayName(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-[var(--ink)]">Email Address:</label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+                    <input
+                      type="email"
+                      required
+                      placeholder="e.g. akash@gmail.com"
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-[var(--ink)] flex items-center justify-between">
+                    <span>Create Password:</span>
+                    <span className="text-[10px] text-[var(--muted)]">At least 6 characters</span>
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      minLength={6}
+                      placeholder="Create a secure password"
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      className="w-full pl-9 pr-10 py-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex items-center justify-between border-t border-[var(--hairline)]">
+                  <span className="text-[11px] text-[var(--muted)]">
+                    Already registered?{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("login");
+                        setAuthError("");
+                      }}
+                      className="text-[var(--accent)] font-bold hover:underline cursor-pointer"
+                    >
+                      Sign In
+                    </button>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAuthModal(false)}
+                      className="px-3.5 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-semibold hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={authIsLoading || !authEmail.trim() || authPassword.length < 6}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>{authIsLoading ? "Creating..." : "Create Account"}</span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+
+            {/* TAB 3: 8-DIGIT EMAIL OTP LOGIN */}
+            {authMode === "otp" && (
+              <div className="space-y-4">
+                {!authOtpSent ? (
+                  /* Step 1: Email Form for OTP */
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-[var(--ink)] flex items-center justify-between">
+                        <span>Your Email Address:</span>
+                        <span className="text-[10px] text-[var(--muted)] font-normal">Real 8-digit OTP will be sent</span>
+                      </label>
+                      <div className="relative">
+                        <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+                        <input
+                          type="email"
+                          placeholder="e.g. akash@gmail.com"
+                          value={authEmail}
+                          onChange={(e) => setAuthEmail(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleSendAuthOtp()}
+                          className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] placeholder-[var(--muted)] focus:outline-none focus:border-[var(--accent)]"
+                          autoFocus
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-2xl bg-indigo-500/5 border border-indigo-500/20 text-xs text-[var(--muted)] leading-relaxed">
+                      🔐 We will deliver an <strong>8-digit verification code</strong> directly to your email inbox. Works across all devices.
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--hairline)]">
+                      <button
+                        type="button"
+                        onClick={() => setShowAuthModal(false)}
+                        className="px-4 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-semibold hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSendAuthOtp}
+                        disabled={authIsLoading || !authEmail.trim()}
+                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Send className="w-3.5 h-3.5" />
+                        <span>{authIsLoading ? "Sending OTP..." : "Send 8-Digit OTP"}</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Step 2: 8-digit OTP Verification */
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                      <span className="text-[var(--muted)]">
+                        Code sent to: <strong className="text-[var(--ink)]">{authEmail}</strong>
+                      </span>
+                      <button
+                        onClick={() => {
+                          setAuthOtpSent(false);
+                          setAuthOtp("");
+                          setAuthError("");
+                        }}
+                        className="text-[11px] font-bold text-[var(--accent)] hover:underline cursor-pointer"
+                      >
+                        Change Email
+                      </button>
+                    </div>
+
+                    {/* 8-Digit Code Input */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-[var(--ink)] flex items-center justify-between">
+                        <span>Enter 8-Digit Verification Code:</span>
+                        <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">8 Digits</span>
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={8}
+                        placeholder="12345678"
+                        value={authOtp}
+                        onChange={(e) => setAuthOtp(e.target.value.replace(/\D/g, ""))}
+                        onKeyDown={(e) => e.key === "Enter" && authOtp.length === 8 && handleVerifyAuthOtp()}
+                        className="w-full text-center text-xl font-mono font-bold tracking-[0.3em] p-3 rounded-xl bg-[var(--surface-2)] border-2 border-[var(--hairline-strong)] text-[var(--ink)] focus:outline-none focus:border-[var(--accent)]"
+                        autoFocus
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-[var(--hairline)]">
+                      <button
+                        type="button"
+                        onClick={handleSendAuthOtp}
+                        disabled={authIsLoading}
+                        className="text-xs text-[var(--muted)] hover:text-[var(--ink)] underline cursor-pointer"
+                      >
+                        Resend Code
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setShowAuthModal(false)}
+                          className="px-3.5 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-semibold hover:bg-[var(--surface-2)] transition-colors cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleVerifyAuthOtp}
+                          disabled={authIsLoading || authOtp.length !== 8}
+                          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>{authIsLoading ? "Verifying..." : "Verify & Sign In"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -4025,7 +4358,7 @@ export function StrategyBuilder() {
                         {authUser ? authUser.displayName : "Guest User (Local Storage)"}
                       </div>
                       <div className="text-[11px] text-[var(--muted)]">
-                        {authUser ? authUser.email : "Log in with 8-digit Email OTP to save cross-device"}
+                        {authUser ? authUser.email : "Log in with Password or 8-digit Email OTP to sync across any device"}
                       </div>
                     </div>
                   </div>

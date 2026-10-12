@@ -40,10 +40,39 @@ export function ShortLinkResolver() {
       return;
     }
 
+    // Helper function to redirect or navigate
+    const handleRedirect = (targetUrl: string) => {
+      // If target URL points to strategy-builder or has code parameter, navigate in-app
+      if (targetUrl.includes("strategy-builder") || targetUrl.includes("code=")) {
+        const matchCode = targetUrl.match(/[?&]code=([^&#\s]+)/i);
+        if (matchCode) {
+          const codeClean = matchCode[1].toUpperCase();
+          navigate(`/apps/strategy-builder?code=${codeClean}`, { replace: true });
+          return;
+        }
+      }
+      // If relative URL
+      if (targetUrl.startsWith("/")) {
+        navigate(targetUrl, { replace: true });
+        return;
+      }
+      // Check if same origin
+      try {
+        const parsed = new URL(targetUrl);
+        if (parsed.origin === window.location.origin) {
+          navigate(`${parsed.pathname}${parsed.search}`, { replace: true });
+          return;
+        }
+      } catch {
+        // Not a full URL
+      }
+      window.location.replace(targetUrl);
+    };
+
     // 1. Instant Cache Redirect: If link is in synchronous local cache, forward right now!
     if (initialCached && initialCached.target_url) {
       recordLinkClick(slug).catch(() => {});
-      window.location.replace(initialCached.target_url);
+      handleRedirect(initialCached.target_url);
       return;
     }
 
@@ -61,8 +90,8 @@ export function ShortLinkResolver() {
           // Record click in background
           recordLinkClick(slug).catch(() => {});
 
-          // Zero-delay immediate forwarding
-          window.location.replace(link.target_url);
+          // Zero-delay forwarding
+          handleRedirect(link.target_url);
         } else {
           // If slug matches pattern of strategy short codes (e.g. 4-8 chars or 12TH-), route to strategy builder
           const upperSlug = slug.toUpperCase();

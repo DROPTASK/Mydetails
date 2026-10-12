@@ -201,6 +201,12 @@ export async function loadStrategyFromCloud(
         const matchPlan = clean.match(/[?&](?:shared|plan)=([^&#\s]+)/i);
         if (matchPlan) {
           clean = decodeURIComponent(matchPlan[1]).trim();
+        } else {
+          // If URL path ends with slug like /12th-t5qv or /t5qv
+          const matchSlug = clean.match(/\/([a-zA-Z0-9_-]{3,20})\/?(?:$|\?)/);
+          if (matchSlug) {
+            clean = matchSlug[1].trim();
+          }
         }
       }
     } catch {
