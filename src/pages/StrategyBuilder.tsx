@@ -57,6 +57,11 @@ import {
   EyeOff,
   Lock,
   UserPlus,
+  Scissors,
+  Undo2,
+  Layers,
+  Split,
+  Sliders,
 } from "lucide-react";
 import {
   CBSE_12TH_SUBJECTS,
@@ -87,6 +92,12 @@ import {
   extractYouTubeVideoId,
   getYouTubeThumbnailUrl,
   formatVideoTime,
+  syncPlanParentProgress,
+  splitTaskIntoPartials,
+  SplitType,
+  TaskTimeRange,
+  PartialTaskDraft,
+  STORAGE_KEY_BACKUP_V1,
 } from "../lib/strategyData";
 import { InAppVideoPlayer } from "../components/InAppVideoPlayer";
 import {
@@ -263,6 +274,48 @@ export function StrategyBuilder() {
   const autoSyncDebounceRef = useRef<any>(null);
   const [codeToLoad, setCodeToLoad] = useState("");
   const [isLoadingCode, setIsLoadingCode] = useState(false);
+
+  // Partial Tasks (Sub-units) Split Modal State
+  const [splitModal, setSplitModal] = useState<{
+    isOpen: boolean;
+    taskId: string;
+    dateStr: string;
+    task: PlanChapterTask;
+    splitMode: "time" | "topic" | "parts";
+    partsCount: number;
+    totalDurationMin: number;
+    drafts: Array<{
+      date: string;
+      label: string;
+      splitType: SplitType;
+      startSec: number;
+      endSec: number;
+      topicName: string;
+      estHours: number;
+      notes: string;
+    }>;
+  } | null>(null);
+
+  // Backlog Auto-Shift Preview & Undo State
+  const [showAutoShiftPreview, setShowAutoShiftPreview] = useState(false);
+  const [shiftUndoSnapshot, setShiftUndoSnapshot] = useState<StrategyPlan | null>(null);
+
+  // YouTube Premium / Google Connected User State
+  const [googleConnectedUser, setGoogleConnectedUser] = useState<{
+    email: string;
+    name: string;
+    isPremium: boolean;
+  } | null>(() => {
+    try {
+      const stored = localStorage.getItem("vk_strategy_yt_google_user");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [showGoogleConnectModal, setShowGoogleConnectModal] = useState(false);
+  const [googleInputEmail, setGoogleInputEmail] = useState("");
+  const [googleInputName, setGoogleInputName] = useState("");
 
   // Sync ref with authUser so async callbacks and debounce timers never see stale null
   const authUserRef = useRef<AuthUser | null>(authUser);
@@ -727,33 +780,151 @@ export function StrategyBuilder() {
   }, [selectedSubjectId]);
 
   // Auto-shift plan dates when user clicks "Auto-Shift Schedule by Backlog Days"
-  const handleAutoShiftBacklog = () => {
-    sfxClick();
-    if (metrics.backlogDays <= 0) return;
+  // Helper to generate drafts for partial tasks split modal
+  const generateSplitDrafts = (
+    task: PlanChapterTask,
+    baseDate: string,
+    mode: "time" | "topic" | "parts",
+    count: number,
+    durationMin: number
+  ) => {
+    const chapterTopics =
+      CBSE_12TH_SUBJECTS.find((s) => s.id === task.subjectId)?.chapters.find((c) => c.id === task.chapterId)?.topics || [];
 
-    const shiftedDays = plan.days.map((d) => {
-      // If date is today or in future, shift it by backlogDays
-      if (d.date >= todayIso) {
+    if (mode === "time") {
+      const safeDuration = Math.max(10, durationMin);
+      const stepSec = Math.round((safeDuration * 60) / count);
+      return Array.from({ length: count }, (_, idx) => {
+        const startSec = idx * stepSec;
+        const endSec = idx === count - 1 ? safeDuration * 60 : (idx + 1) * stepSec;
+        const date = addDaysToDate(baseDate, idx);
         return {
-          ...d,
-          date: addDaysToDate(d.date, metrics.backlogDays),
+          date,
+          label: `Part ${idx + 1} (${formatVideoTime(startSec)} - ${formatVideoTime(endSec)})`,
+          splitType: "time" as SplitType,
+          startSec,
+          endSec,
+          topicName: "",
+          estHours: Math.max(1, Math.round(task.estHours / count)),
+          notes: `Lecture segment ${formatVideoTime(startSec)} - ${formatVideoTime(endSec)}`,
         };
-      }
-      return d;
-    });
+      });
+    }
 
-    const newTargetEnd = addDaysToDate(plan.targetEndDate, metrics.backlogDays);
-    const updated: StrategyPlan = {
-      ...plan,
-      targetEndDate: newTargetEnd,
-      days: shiftedDays,
-    };
-    updatePlan(updated);
-    triggerToast(`Shifted future schedule by +${metrics.backlogDays} backlog days!`);
+    if (mode === "topic" && chapterTopics.length > 0) {
+      const topicCount = Math.min(chapterTopics.length, count);
+      return chapterTopics.slice(0, topicCount).map((top, idx) => ({
+        date: addDaysToDate(baseDate, idx),
+        label: `Part ${idx + 1}: ${top}`,
+        splitType: "topic" as SplitType,
+        startSec: 0,
+        endSec: 0,
+        topicName: top,
+        estHours: Math.max(1, Math.round(task.estHours / topicCount)),
+        notes: `Topic focus: ${top}`,
+      }));
+    }
+
+    // Default "parts" mode
+    return Array.from({ length: count }, (_, idx) => {
+      const defaultLabels = [
+        "Part 1: Concept & Theory",
+        "Part 2: NCERT Back Exercises",
+        "Part 3: Past 10-Yr PYQs",
+        "Part 4: Sample Paper & Revision",
+        "Part 5: Advanced Problems",
+      ];
+      return {
+        date: addDaysToDate(baseDate, idx),
+        label: defaultLabels[idx] || `Part ${idx + 1}`,
+        splitType: "chapter" as SplitType,
+        startSec: 0,
+        endSec: 0,
+        topicName: "",
+        estHours: Math.max(1, Math.round(task.estHours / count)),
+        notes: task.notes || `Sub-unit part ${idx + 1} of ${task.chapterName}`,
+      };
+    });
+  };
+
+  const handleOpenSplitModal = (dateStr: string, task: PlanChapterTask) => {
+    sfxClick();
+    const chapterTopics =
+      CBSE_12TH_SUBJECTS.find((s) => s.id === task.subjectId)?.chapters.find((c) => c.id === task.chapterId)?.topics || [];
+    const defaultMode: "time" | "topic" | "parts" = task.videoUrl ? "time" : chapterTopics.length > 0 ? "topic" : "parts";
+    const initialCount = defaultMode === "topic" ? Math.min(3, Math.max(2, chapterTopics.length)) : 2;
+    const initialDuration = 60; // 60 mins default
+    const initialDrafts = generateSplitDrafts(task, dateStr, defaultMode, initialCount, initialDuration);
+
+    setSplitModal({
+      isOpen: true,
+      taskId: task.id,
+      dateStr,
+      task,
+      splitMode: defaultMode,
+      partsCount: initialCount,
+      totalDurationMin: initialDuration,
+      drafts: initialDrafts,
+    });
+  };
+
+  const handleApplySplit = () => {
+    if (!splitModal || splitModal.drafts.length === 0) return;
+    sfxClick();
+    const partialDrafts: PartialTaskDraft[] = splitModal.drafts.map((d) => ({
+      date: d.date,
+      label: d.label,
+      splitType: d.splitType,
+      timeRange:
+        d.splitType === "time"
+          ? {
+              startSec: d.startSec,
+              endSec: d.endSec,
+              label: `${formatVideoTime(d.startSec)} - ${formatVideoTime(d.endSec)}`,
+            }
+          : undefined,
+      topicName: d.splitType === "topic" ? d.topicName : undefined,
+      estHours: d.estHours,
+      notes: d.notes,
+    }));
+
+    const updatedPlan = splitTaskIntoPartials(plan, splitModal.taskId, partialDrafts);
+    updatePlan(updatedPlan);
+    setSplitModal(null);
+    triggerToast(`✂️ Successfully split "${splitModal.task.chapterName}" into ${partialDrafts.length} partial tasks across days!`);
     sfxSuccess();
   };
 
-  // Toggle task completion
+  const handleUpdateTaskProgress = (dateStr: string, taskId: string, percent: number) => {
+    const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+    const isDone = clamped >= 100;
+    if (isDone) sfxSuccess();
+
+    const updatedDays = plan.days.map((day) => {
+      if (day.date !== dateStr) return day;
+      return {
+        ...day,
+        tasks: day.tasks.map((task) => {
+          if (task.id === taskId) {
+            return {
+              ...task,
+              completed: isDone,
+              progressPercent: clamped,
+            };
+          }
+          return task;
+        }),
+      };
+    });
+
+    const synced = syncPlanParentProgress({
+      ...plan,
+      days: updatedDays,
+    });
+    updatePlan(synced);
+  };
+
+  // Toggle task completion with parent-partial sync
   const handleToggleTask = (dateStr: string, taskId: string) => {
     sfxClick();
     const updatedDays = plan.days.map((day) => {
@@ -764,17 +935,22 @@ export function StrategyBuilder() {
           if (task.id === taskId) {
             const nextDone = !task.completed;
             if (nextDone) sfxSuccess();
-            return { ...task, completed: nextDone };
+            return {
+              ...task,
+              completed: nextDone,
+              progressPercent: nextDone ? 100 : 0,
+            };
           }
           return task;
         }),
       };
     });
 
-    updatePlan({
+    const synced = syncPlanParentProgress({
       ...plan,
       days: updatedDays,
     });
+    updatePlan(synced);
   };
 
   // Change Day Type (Working / Holiday / Self Leave)
@@ -800,7 +976,7 @@ export function StrategyBuilder() {
     });
   };
 
-  // Delete task from day
+  // Delete task from day with parent-partial sync
   const handleDeleteTask = (dateStr: string, taskId: string) => {
     sfxClick();
     const updatedDays = plan.days.map((day) => {
@@ -810,10 +986,187 @@ export function StrategyBuilder() {
         tasks: day.tasks.filter((t) => t.id !== taskId),
       };
     });
-    updatePlan({
+    const synced = syncPlanParentProgress({
       ...plan,
       days: updatedDays,
     });
+    updatePlan(synced);
+  };
+
+  // FEATURE 2: Copy Full App Data JSON (tasks, partials, schedule, settings) with versioning
+  const handleCopyFullAppJson = () => {
+    sfxClick();
+    try {
+      const fullExport = {
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        appName: "CBSE Class 12 Strategy Builder",
+        plan: plan,
+        syllabusProgress: syllabusProgress,
+        settings: {
+          account: authUser ? { email: authUser.email, displayName: authUser.displayName } : null,
+          easyShortCode: easyShortCode || undefined,
+          youtubeConnected: googleConnectedUser
+            ? { email: googleConnectedUser.email, name: googleConnectedUser.name, isPremium: googleConnectedUser.isPremium }
+            : null,
+          activeSubjectIds: plan.selectedSubjectIds,
+        },
+      };
+
+      const jsonStr = JSON.stringify(fullExport, null, 2);
+      navigator.clipboard.writeText(jsonStr);
+      triggerToast("📋 Complete Strategy Data JSON (Version 2) copied to clipboard!");
+      sfxSuccess();
+    } catch (e) {
+      console.error("Failed to copy JSON", e);
+      triggerToast("Unable to copy to clipboard.");
+    }
+  };
+
+  // FEATURE 3: Intelligent Backlog Auto-Shift with Load Balancing & Preview & Undo
+  const getOverduePendingTasks = () => {
+    const list: Array<{ task: PlanChapterTask; originalDate: string }> = [];
+    plan.days.forEach((d) => {
+      if (d.date < todayIso) {
+        d.tasks.forEach((t) => {
+          if (!t.completed) {
+            list.push({ task: t, originalDate: d.date });
+          }
+        });
+      }
+    });
+    return list;
+  };
+
+  const handleOpenAutoShiftPreview = () => {
+    sfxClick();
+    const overdue = getOverduePendingTasks();
+    if (overdue.length === 0) {
+      triggerToast("✨ Zero backlog! No incomplete overdue tasks to shift.");
+      return;
+    }
+    setShowAutoShiftPreview(true);
+  };
+  const handleAutoShiftBacklog = handleOpenAutoShiftPreview;
+
+  const handleConfirmAutoShift = () => {
+    sfxClick();
+    const overdue = getOverduePendingTasks();
+    if (overdue.length === 0) {
+      setShowAutoShiftPreview(false);
+      return;
+    }
+
+    // Save snapshot for 1-click Undo
+    setShiftUndoSnapshot(JSON.parse(JSON.stringify(plan)));
+
+    // Extract overdue tasks in original order
+    const tasksToReschedule = overdue.map((item) => item.task);
+
+    // Deep clone future & past days
+    let newDays = plan.days.map((d) => {
+      if (d.date < todayIso) {
+        // DO NOT TOUCH COMPLETED TASKS! Keep only completed tasks in the past
+        return {
+          ...d,
+          tasks: d.tasks.filter((t) => t.completed),
+        };
+      }
+      return {
+        ...d,
+        tasks: [...d.tasks],
+      };
+    });
+
+    // Distribute incomplete overdue tasks starting from today, respecting day-wise load balance
+    let taskIdx = 0;
+    let dayCursorDate = todayIso;
+
+    while (taskIdx < tasksToReschedule.length) {
+      // Find or create day
+      let dayObj = newDays.find((d) => d.date === dayCursorDate);
+      if (!dayObj) {
+        dayObj = {
+          date: dayCursorDate,
+          dayType: "working",
+          targetStudyHours: 5,
+          tasks: [],
+        };
+        newDays.push(dayObj);
+        newDays.sort((a, b) => a.date.localeCompare(b.date));
+      }
+
+      // Calculate current load on this day
+      const currentLoadHours = dayObj.tasks.reduce((sum, t) => sum + (t.estHours || 2), 0);
+      const capacity = Math.max(3, dayObj.targetStudyHours);
+
+      // If day still has capacity or is empty, assign next task
+      if (currentLoadHours < capacity || dayObj.tasks.length === 0) {
+        const taskToPlace = tasksToReschedule[taskIdx];
+        dayObj.tasks.push({
+          ...taskToPlace,
+          notes: taskToPlace.notes ? `${taskToPlace.notes} (Shifted from backlog)` : "Shifted from backlog",
+        });
+        taskIdx++;
+      } else {
+        // Move to next day
+        dayCursorDate = addDaysToDate(dayCursorDate, 1);
+      }
+    }
+
+    // Determine new targetEndDate if days were extended
+    const maxDate = newDays.reduce((max, d) => (d.date > max ? d.date : max), plan.targetEndDate);
+
+    const rescheduledPlan: StrategyPlan = {
+      ...plan,
+      targetEndDate: maxDate > plan.targetEndDate ? maxDate : plan.targetEndDate,
+      days: newDays,
+      updatedAt: Date.now(),
+    };
+
+    const synced = syncPlanParentProgress(rescheduledPlan);
+    updatePlan(synced);
+    setShowAutoShiftPreview(false);
+    triggerToast(`🚀 Auto-Shift complete! Rescheduled ${tasksToReschedule.length} pending tasks forward from today.`);
+    sfxSuccess();
+  };
+
+  const handleUndoAutoShift = () => {
+    sfxClick();
+    if (!shiftUndoSnapshot) return;
+    updatePlan(shiftUndoSnapshot);
+    setShiftUndoSnapshot(null);
+    triggerToast("↺ Auto-Shift undone! Previous schedule restored.");
+    sfxSuccess();
+  };
+
+  // FEATURE 5: Connect / Disconnect Google / YouTube Premium Account
+  const handleConnectGoogleUser = (email: string, name: string) => {
+    sfxClick();
+    const newUser = {
+      email,
+      name,
+      isPremium: true,
+    };
+    setGoogleConnectedUser(newUser);
+    try {
+      localStorage.setItem("vk_strategy_yt_google_user", JSON.stringify(newUser));
+    } catch {
+      // ignore
+    }
+    triggerToast("🎉 Google / YouTube Premium Account connected successfully!");
+    sfxSuccess();
+  };
+
+  const handleDisconnectGoogleUser = () => {
+    sfxClick();
+    setGoogleConnectedUser(null);
+    try {
+      localStorage.removeItem("vk_strategy_yt_google_user");
+    } catch {
+      // ignore
+    }
+    triggerToast("Logged out of Google / YouTube Premium.");
   };
 
   // Open modal to add task for specific date
@@ -1763,6 +2116,29 @@ export function StrategyBuilder() {
                                 <Clock className="w-3 h-3" />
                                 <span>{task.estHours}h planned</span>
                               </span>
+                              {task.isPartial && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/20 flex items-center gap-1">
+                                  <Layers className="w-3 h-3" />
+                                  <span>Part {task.partialIndex} of {task.totalPartials}</span>
+                                </span>
+                              )}
+                              {task.timeRange && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  <span>{task.timeRange.label || `${formatVideoTime(task.timeRange.startSec)} - ${formatVideoTime(task.timeRange.endSec)}`}</span>
+                                </span>
+                              )}
+                              {task.topicName && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                                  Topic: {task.topicName}
+                                </span>
+                              )}
+                              {task.isSplitParent && (
+                                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center gap-1">
+                                  <Split className="w-3 h-3" />
+                                  <span>Split Parent ({task.progressPercent ?? (task.completed ? 100 : 0)}%)</span>
+                                </span>
+                              )}
                             </div>
 
                             <h4
@@ -1776,11 +2152,66 @@ export function StrategyBuilder() {
                             {task.notes && (
                               <p className="text-xs text-[var(--muted)]">{task.notes}</p>
                             )}
+
+                            {/* Partial Task Independent Progress Stepper */}
+                            {task.isPartial && (
+                              <div className="pt-2 border-t border-[var(--hairline)] flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[11px] font-bold text-[var(--muted)]">Sub-unit Progress:</span>
+                                  <span className="text-xs font-mono font-bold text-[var(--accent)]">{task.progressPercent ?? (task.completed ? 100 : 0)}%</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  {[0, 25, 50, 75, 100].map((pct) => (
+                                    <button
+                                      key={pct}
+                                      onClick={() => handleUpdateTaskProgress(todayIso, task.id, pct)}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                                        (task.progressPercent ?? (task.completed ? 100 : 0)) === pct
+                                          ? "bg-[var(--accent)] text-white shadow-xs"
+                                          : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--ink)]"
+                                      }`}
+                                    >
+                                      {pct}%
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Parent Task Auto-Calculated Progress Bar */}
+                            {task.isSplitParent && !task.isPartial && (
+                              <div className="pt-2 border-t border-[var(--hairline)] space-y-1">
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="font-bold text-[var(--muted)]">Parent Lecture Progress (from sub-units):</span>
+                                  <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                                    {task.progressPercent ?? (task.completed ? 100 : 0)}%
+                                  </span>
+                                </div>
+                                <div className="w-full h-1.5 bg-[var(--surface-2)] rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-emerald-500 transition-all duration-300 rounded-full"
+                                    style={{ width: `${task.progressPercent ?? (task.completed ? 100 : 0)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
 
                         {/* Top Right Actions */}
                         <div className="flex items-center gap-1 shrink-0">
+                          {/* Split Task Button */}
+                          {!task.isPartial && (
+                            <button
+                              onClick={() => handleOpenSplitModal(todayIso, task)}
+                              className="p-1.5 rounded-xl border border-[var(--hairline)] hover:bg-[var(--surface-2)] text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer text-indigo-500"
+                              title="Split task into partial sub-units across multiple days"
+                            >
+                              <Scissors className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Split</span>
+                            </button>
+                          )}
+
                           <button
                             onClick={() =>
                               setVideoEditModal({
@@ -2275,6 +2706,33 @@ export function StrategyBuilder() {
                                       <Clock className="w-3 h-3" />
                                       <span>{task.estHours}h</span>
                                     </span>
+
+                                    {task.isPartial && (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/20 flex items-center gap-1">
+                                        <Layers className="w-2.5 h-2.5" />
+                                        <span>Part {task.partialIndex}/{task.totalPartials}</span>
+                                      </span>
+                                    )}
+
+                                    {task.timeRange && (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20 flex items-center gap-1">
+                                        <Clock className="w-2.5 h-2.5" />
+                                        <span>{task.timeRange.label || `${formatVideoTime(task.timeRange.startSec)}-${formatVideoTime(task.timeRange.endSec)}`}</span>
+                                      </span>
+                                    )}
+
+                                    {task.topicName && (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                                        {task.topicName}
+                                      </span>
+                                    )}
+
+                                    {task.isSplitParent && (
+                                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center gap-1">
+                                        <Split className="w-2.5 h-2.5" />
+                                        <span>Parent ({task.progressPercent ?? (task.completed ? 100 : 0)}%)</span>
+                                      </span>
+                                    )}
                                   </div>
 
                                   <div
@@ -2288,6 +2746,47 @@ export function StrategyBuilder() {
                                   {task.notes && (
                                     <div className="text-[11px] text-[var(--muted)] mt-0.5 line-clamp-1">
                                       {task.notes}
+                                    </div>
+                                  )}
+
+                                  {/* Partial Task Independent Progress Stepper */}
+                                  {task.isPartial && (
+                                    <div className="mt-1.5 pt-1.5 border-t border-[var(--hairline)] flex flex-wrap items-center gap-1.5">
+                                      <span className="text-[10px] font-bold text-[var(--muted)]">Progress:</span>
+                                      <span className="text-[10px] font-mono font-bold text-[var(--accent)]">{task.progressPercent ?? (task.completed ? 100 : 0)}%</span>
+                                      <div className="flex items-center gap-1 ml-auto">
+                                        {[0, 25, 50, 75, 100].map((pct) => (
+                                          <button
+                                            key={pct}
+                                            onClick={() => handleUpdateTaskProgress(day.date, task.id, pct)}
+                                            className={`px-1 py-0.5 rounded text-[9px] font-bold cursor-pointer transition-colors ${
+                                              (task.progressPercent ?? (task.completed ? 100 : 0)) === pct
+                                                ? "bg-[var(--accent)] text-white shadow-xs"
+                                                : "bg-[var(--surface-2)] text-[var(--muted)] hover:text-[var(--ink)]"
+                                            }`}
+                                          >
+                                            {pct}%
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Parent Task Progress Bar */}
+                                  {task.isSplitParent && !task.isPartial && (
+                                    <div className="mt-1.5 pt-1.5 border-t border-[var(--hairline)] space-y-1">
+                                      <div className="flex items-center justify-between text-[10px]">
+                                        <span className="font-bold text-[var(--muted)]">Total Sub-units Done:</span>
+                                        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                                          {task.progressPercent ?? (task.completed ? 100 : 0)}%
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-1 bg-[var(--surface-2)] rounded-full overflow-hidden">
+                                        <div
+                                          className="h-full bg-emerald-500 transition-all duration-300 rounded-full"
+                                          style={{ width: `${task.progressPercent ?? (task.completed ? 100 : 0)}%` }}
+                                        />
+                                      </div>
                                     </div>
                                   )}
 
@@ -2321,6 +2820,17 @@ export function StrategyBuilder() {
 
                               {/* Right Actions */}
                               <div className="flex items-center gap-1 shrink-0">
+                                {/* Split Task Button */}
+                                {!task.isPartial && (
+                                  <button
+                                    onClick={() => handleOpenSplitModal(day.date, task)}
+                                    className="p-1 rounded-lg text-indigo-500 hover:bg-indigo-500/10 transition-colors cursor-pointer"
+                                    title="Split task into sub-units across multiple days"
+                                  >
+                                    <Scissors className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+
                                 <button
                                   onClick={() => {
                                     sfxClick();
@@ -2861,11 +3371,22 @@ export function StrategyBuilder() {
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              {shiftUndoSnapshot && (
+                <button
+                  onClick={handleUndoAutoShift}
+                  className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow transition-all flex items-center gap-1.5 cursor-pointer"
+                  title="Undo the last auto-shift and restore previous dates"
+                >
+                  <Undo2 className="w-3.5 h-3.5" />
+                  <span>Undo Auto-Shift</span>
+                </button>
+              )}
+
               {metrics.hasActiveBacklog && (
                 <>
                   <button
                     onClick={handleClearAllBacklogs}
-                    className="px-3 py-2 rounded-xl border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                    className="px-3 py-2 rounded-xl border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                     title="Mark all overdue chapters from past days completed"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
@@ -2873,11 +3394,12 @@ export function StrategyBuilder() {
                   </button>
 
                   <button
-                    onClick={handleAutoShiftBacklog}
-                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-bold text-xs shadow transition-all flex items-center gap-1.5"
+                    onClick={handleOpenAutoShiftPreview}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-black font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+                    title="Auto-shift overdue incomplete tasks forward with day-wise load balancing"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Auto-Shift Calendar by +{metrics.backlogDays} Days</span>
+                    <span>Auto Shift Schedule</span>
                   </button>
                 </>
               )}
@@ -4467,6 +4989,50 @@ export function StrategyBuilder() {
                   </div>
                 )}
 
+                {/* YouTube Premium & Official Google Account */}
+                <div className="pt-2 border-t border-[var(--hairline)] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-red-600/10 text-red-600 flex items-center justify-center shrink-0">
+                        <Youtube className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-[var(--ink)] flex items-center gap-1.5">
+                          <span>YouTube Premium Account</span>
+                          {googleConnectedUser && (
+                            <span className="text-[10px] font-black px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-500 border border-amber-500/30">
+                              ★ Active
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-[var(--muted)]">
+                          {googleConnectedUser
+                            ? `${googleConnectedUser.name} (${googleConnectedUser.email}) • Ad-free study session`
+                            : "Connect Google/YouTube account for ad-free lecture benefits"}
+                        </div>
+                      </div>
+                    </div>
+                    {googleConnectedUser ? (
+                      <button
+                        onClick={handleDisconnectGoogleUser}
+                        className="px-2 py-1 rounded-xl border border-rose-500/30 text-rose-500 hover:bg-rose-500/10 text-xs font-semibold cursor-pointer transition-colors"
+                      >
+                        Disconnect
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setShowGoogleConnectModal(true);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1 cursor-pointer"
+                      >
+                        <Youtube className="w-3.5 h-3.5" />
+                        <span>Connect</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 {/* Open Plan by Short Code */}
                 <div className="pt-2 border-t border-[var(--hairline)] space-y-1.5">
                   <div className="text-[11px] font-bold text-[var(--ink)] flex items-center justify-between">
@@ -4501,6 +5067,20 @@ export function StrategyBuilder() {
             <div className="space-y-2">
               <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">Strategy Tools</div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* Feature 2: Copy Full App JSON */}
+                <button
+                  onClick={handleCopyFullAppJson}
+                  className="p-3 rounded-2xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] hover:border-[var(--accent)] text-left transition-all flex items-start gap-2.5 cursor-pointer"
+                >
+                  <div className="w-7 h-7 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <Download className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-[var(--ink)]">Copy JSON (Full App Data)</div>
+                    <div className="text-[11px] text-[var(--muted)]">Tasks, partials, schedule &amp; settings</div>
+                  </div>
+                </button>
+
                 {/* AI Prompt Builder */}
                 <button
                   onClick={() => {
@@ -4601,6 +5181,358 @@ export function StrategyBuilder() {
                 className="px-4 py-2 rounded-xl bg-[var(--surface-2)] hover:bg-[var(--surface-elevated)] border border-[var(--hairline)] text-xs font-bold transition-colors cursor-pointer"
               >
                 Close Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SPLIT TASK INTO PARTIAL SUB-UNITS */}
+      {splitModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div
+            className="surface-elevated max-w-xl w-full rounded-3xl border border-[var(--hairline-strong)] p-5 sm:p-6 space-y-4 shadow-2xl relative max-h-[92vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-500/15 text-indigo-500 border border-indigo-500/30 flex items-center justify-center shrink-0">
+                  <Scissors className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-base text-[var(--ink)] truncate">Split Task into Partial Sub-Units</h3>
+                  <p className="text-xs text-[var(--muted)] truncate">
+                    {splitModal.task.subjectName} • {splitModal.task.chapterName}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSplitModal(null)}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Split Mode Tabs */}
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">Split Strategy</label>
+              <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <button
+                  onClick={() => {
+                    const newDrafts = generateSplitDrafts(splitModal.task, splitModal.dateStr, "time", splitModal.partsCount, splitModal.totalDurationMin);
+                    setSplitModal({ ...splitModal, splitMode: "time", drafts: newDrafts });
+                  }}
+                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    splitModal.splitMode === "time" ? "bg-[var(--surface-elevated)] text-[var(--accent)] shadow-xs" : "text-[var(--muted)] hover:text-[var(--ink)]"
+                  }`}
+                >
+                  ⏱ Time Range
+                </button>
+                <button
+                  onClick={() => {
+                    const newDrafts = generateSplitDrafts(splitModal.task, splitModal.dateStr, "topic", splitModal.partsCount, splitModal.totalDurationMin);
+                    setSplitModal({ ...splitModal, splitMode: "topic", drafts: newDrafts });
+                  }}
+                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    splitModal.splitMode === "topic" ? "bg-[var(--surface-elevated)] text-[var(--accent)] shadow-xs" : "text-[var(--muted)] hover:text-[var(--ink)]"
+                  }`}
+                >
+                  🏷 Chapter Topics
+                </button>
+                <button
+                  onClick={() => {
+                    const newDrafts = generateSplitDrafts(splitModal.task, splitModal.dateStr, "parts", splitModal.partsCount, splitModal.totalDurationMin);
+                    setSplitModal({ ...splitModal, splitMode: "parts", drafts: newDrafts });
+                  }}
+                  className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    splitModal.splitMode === "parts" ? "bg-[var(--surface-elevated)] text-[var(--accent)] shadow-xs" : "text-[var(--muted)] hover:text-[var(--ink)]"
+                  }`}
+                >
+                  📚 Sub-Units
+                </button>
+              </div>
+            </div>
+
+            {/* Parts Count Selector */}
+            <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+              <div>
+                <div className="text-xs font-bold text-[var(--ink)]">Number of Partial Tasks</div>
+                <div className="text-[11px] text-[var(--muted)]">Spread across consecutive or custom study dates</div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                {[2, 3, 4, 5].map((cnt) => (
+                  <button
+                    key={cnt}
+                    onClick={() => {
+                      const newDrafts = generateSplitDrafts(splitModal.task, splitModal.dateStr, splitModal.splitMode, cnt, splitModal.totalDurationMin);
+                      setSplitModal({ ...splitModal, partsCount: cnt, drafts: newDrafts });
+                    }}
+                    className={`w-7 h-7 rounded-lg text-xs font-bold cursor-pointer transition-colors ${
+                      splitModal.partsCount === cnt
+                        ? "bg-[var(--accent)] text-white shadow-xs"
+                        : "surface-elevated border border-[var(--hairline)] text-[var(--muted)] hover:text-[var(--ink)]"
+                    }`}
+                  >
+                    {cnt}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Total Duration (for Lecture time mode) */}
+            {splitModal.splitMode === "time" && (
+              <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <div>
+                  <div className="text-xs font-bold text-[var(--ink)]">Lecture Video Duration</div>
+                  <div className="text-[11px] text-[var(--muted)]">Splits total lecture time evenly into intervals</div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={10}
+                    max={600}
+                    step={5}
+                    value={splitModal.totalDurationMin}
+                    onChange={(e) => {
+                      const dur = Math.max(10, Number(e.target.value) || 60);
+                      const newDrafts = generateSplitDrafts(splitModal.task, splitModal.dateStr, splitModal.splitMode, splitModal.partsCount, dur);
+                      setSplitModal({ ...splitModal, totalDurationMin: dur, drafts: newDrafts });
+                    }}
+                    className="w-16 px-2 py-1 rounded-lg bg-[var(--surface-elevated)] border border-[var(--hairline-strong)] text-xs font-bold font-mono text-center text-[var(--ink)] focus:outline-none"
+                  />
+                  <span className="text-xs font-bold text-[var(--muted)]">mins</span>
+                </div>
+              </div>
+            )}
+
+            {/* Partial Tasks Draft Preview List */}
+            <div className="space-y-2">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                Day-by-Day Assignment ({splitModal.drafts.length} Parts):
+              </label>
+              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                {splitModal.drafts.map((draft, idx) => (
+                  <div key={idx} className="p-3 rounded-xl border border-[var(--hairline)] bg-[var(--surface-2)] space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-[var(--ink)] flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] flex items-center justify-center text-[10px] font-black">
+                          {idx + 1}
+                        </span>
+                        <span>{draft.label}</span>
+                      </span>
+                      <span className="text-[10px] font-mono text-[var(--muted)]">~{draft.estHours}h planned</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <label className="text-[10px] font-bold text-[var(--muted)]">Target Date:</label>
+                        <select
+                          value={draft.date}
+                          onChange={(e) => {
+                            const newDrafts = [...splitModal.drafts];
+                            newDrafts[idx].date = e.target.value;
+                            setSplitModal({ ...splitModal, drafts: newDrafts });
+                          }}
+                          className="w-full mt-0.5 px-2 py-1 rounded-lg bg-[var(--surface-elevated)] border border-[var(--hairline)] text-xs font-bold text-[var(--ink)] focus:outline-none"
+                        >
+                          {plan.days.map((d) => (
+                            <option key={d.date} value={d.date}>
+                              {formatFriendlyDate(d.date)} ({d.date})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-[var(--muted)]">Part Focus / Topic:</label>
+                        <input
+                          type="text"
+                          value={draft.label}
+                          onChange={(e) => {
+                            const newDrafts = [...splitModal.drafts];
+                            newDrafts[idx].label = e.target.value;
+                            setSplitModal({ ...splitModal, drafts: newDrafts });
+                          }}
+                          className="w-full mt-0.5 px-2 py-1 rounded-lg bg-[var(--surface-elevated)] border border-[var(--hairline)] text-xs text-[var(--ink)] focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--hairline)]">
+              <button
+                onClick={() => setSplitModal(null)}
+                className="px-4 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-bold text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleApplySplit}
+                className="px-5 py-2 rounded-xl bg-[var(--accent)] hover:opacity-90 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Scissors className="w-3.5 h-3.5" />
+                <span>Apply Partial Split</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AUTO-SHIFT PREVIEW & LOAD-BALANCED CONFIRMATION */}
+      {showAutoShiftPreview && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div
+            className="surface-elevated max-w-lg w-full rounded-3xl border border-[var(--hairline-strong)] p-5 sm:p-6 space-y-4 shadow-2xl relative max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/15 text-amber-500 border border-amber-500/30 flex items-center justify-center shrink-0">
+                  <RefreshCw className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[var(--ink)]">Auto-Shift Backlog Schedule</h3>
+                  <p className="text-xs text-[var(--muted)]">Move pending tasks forward with day-wise load balancing</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowAutoShiftPreview(false)}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300 space-y-1.5">
+              <div className="font-bold flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4" />
+                <span>Data-Safe Re-balancing Guarantee</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                Completed tasks in past dates will <strong>never be modified or moved</strong>. Only pending/incomplete tasks are rescheduled forward starting from today ({formatFriendlyDate(todayIso)}) without exceeding daily study hours.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="p-3 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <span className="text-[10px] font-bold text-[var(--muted)] uppercase">Pending Tasks to Shift</span>
+                <div className="text-xl font-black text-rose-500 mt-1">{getOverduePendingTasks().length} Chapters</div>
+              </div>
+              <div className="p-3 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <span className="text-[10px] font-bold text-[var(--muted)] uppercase">Starting Reschedule Date</span>
+                <div className="text-xl font-black text-emerald-500 mt-1">Today</div>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">Overdue Tasks Being Moved:</label>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                {getOverduePendingTasks().map(({ task, originalDate }, i) => (
+                  <div key={task.id || i} className="p-2.5 rounded-xl border border-[var(--hairline)] bg-[var(--surface)] flex items-center justify-between text-xs">
+                    <span className="font-medium text-[var(--ink)] truncate max-w-[260px]">
+                      • {task.subjectName}: {task.chapterName}
+                    </span>
+                    <span className="text-[10px] font-mono text-[var(--muted)] shrink-0">Was: {formatFriendlyDate(originalDate)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--hairline)]">
+              <button
+                onClick={() => setShowAutoShiftPreview(false)}
+                className="px-4 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-bold text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmAutoShift}
+                className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-black font-extrabold text-xs shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Confirm &amp; Auto-Shift Schedule</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: GOOGLE / YOUTUBE PREMIUM CONNECT */}
+      {showGoogleConnectModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div
+            className="surface-elevated max-w-md w-full rounded-3xl border border-[var(--hairline-strong)] p-5 sm:p-6 space-y-4 shadow-2xl relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[var(--hairline)] pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-red-600 text-white flex items-center justify-center shadow-sm">
+                  <Youtube className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[var(--ink)]">Connect YouTube Premium</h3>
+                  <p className="text-xs text-[var(--muted)]">Official Google Session for Ad-Free Lectures</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowGoogleConnectModal(false)}
+                className="w-8 h-8 rounded-full surface-elevated border border-[var(--hairline)] flex items-center justify-center text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="text-xs text-[var(--muted)] space-y-2 leading-relaxed">
+              <p>
+                Connecting your Google Account enables the player embed to recognize your active YouTube session and apply <strong>YouTube Premium benefits</strong> (ad-free playback, study focus, speed retention).
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[11px] font-bold text-[var(--ink)]">Google / YouTube Account Email:</label>
+                <input
+                  type="email"
+                  value={googleInputEmail}
+                  onChange={(e) => setGoogleInputEmail(e.target.value)}
+                  placeholder="e.g. student@gmail.com"
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] focus:outline-none focus:border-red-500"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-[var(--ink)]">Display Name (Optional):</label>
+                <input
+                  type="text"
+                  value={googleInputName}
+                  onChange={(e) => setGoogleInputName(e.target.value)}
+                  placeholder="e.g. Aman Sharma"
+                  className="w-full mt-1 px-3 py-2 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] text-xs text-[var(--ink)] focus:outline-none focus:border-red-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--hairline)]">
+              <button
+                onClick={() => setShowGoogleConnectModal(false)}
+                className="px-4 py-2 rounded-xl surface-elevated border border-[var(--hairline)] text-xs font-bold text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const email = googleInputEmail.trim() || authUser?.email || "student@gmail.com";
+                  const name = googleInputName.trim() || authUser?.displayName || "Google User";
+                  handleConnectGoogleUser(email, name);
+                  setShowGoogleConnectModal(false);
+                }}
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Youtube className="w-3.5 h-3.5" />
+                <span>Connect Google Account</span>
               </button>
             </div>
           </div>

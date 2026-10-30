@@ -31,6 +31,14 @@ export interface SubjectInfo {
   chapters: SubjectChapter[];
 }
 
+export type SplitType = "time" | "chapter" | "topic";
+
+export interface TaskTimeRange {
+  startSec: number;
+  endSec: number;
+  label?: string; // e.g. "00:00 - 25:00"
+}
+
 export interface PlanChapterTask {
   id: string;
   subjectId: string;
@@ -43,6 +51,17 @@ export interface PlanChapterTask {
   notes?: string;
   videoUrl?: string; // YouTube video / lecture URL
   videoTitle?: string; // Optional custom video lecture title
+
+  // Partial Task (Sub-unit) fields
+  isPartial?: boolean;
+  parentId?: string; // Points to the parent task id if this is a sub-unit
+  partialIndex?: number; // 1-based index (e.g. 1)
+  totalPartials?: number; // Total parts (e.g. 3)
+  splitType?: SplitType;
+  timeRange?: TaskTimeRange; // For lecture-aware time splits (e.g. 00:00 - 25:00)
+  topicName?: string; // For topic-based splits (e.g. "Gauss's Law")
+  progressPercent?: number; // 0 to 100
+  isSplitParent?: boolean; // Set to true if this task was divided into sub-units
 }
 
 export interface PlanDay {
@@ -1114,14 +1133,231 @@ export function clearAllPlanTasks(plan: StrategyPlan): StrategyPlan {
 // LocalStorage Persistence Keys
 const STORAGE_KEY_PLAN = "vk_strategy_builder_plan_v1";
 const STORAGE_KEY_SYLLABUS = "vk_strategy_syllabus_progress_v1";
+export const STORAGE_KEY_BACKUP_V1 = "strategy_plan_backup_v1";
+
+/**
+ * Migration helper to ensure backward-compatibility:
+ * 1. Checks if all tasks have normalized fields (progressPercent, etc.)
+ * 2. Links parent and partial tasks and recalculates parent progress
+ */
+export function migratePlanData(plan: StrategyPlan): StrategyPlan {
+  if (!plan || !Array.isArray(plan.days)) return plan;
+
+  // Step 1: Normalize all tasks
+  const normalizedDays = plan.days.map((day) => ({
+    ...day,
+    tasks: (day.tasks || []).map((t) => {
+      const isCompleted = !!t.completed;
+      return {
+        ...t,
+        completed: isCompleted,
+        progressPercent:
+          typeof t.progressPercent === "number"
+            ? Math.max(0, Math.min(100, Math.round(t.progressPercent)))
+            : isCompleted
+            ? 100
+            : 0,
+      };
+    }),
+  }));
+
+  const migratedPlan: StrategyPlan = {
+    ...plan,
+    days: normalizedDays,
+  };
+
+  // Step 2: Auto-calculate parent progress from partials
+  return syncPlanParentProgress(migratedPlan);
+}
+
+/**
+ * Recalculates progress for any parent tasks whose sub-units (partials) exist across any day
+ */
+export function syncPlanParentProgress(plan: StrategyPlan): StrategyPlan {
+  // Collect all partial tasks across all days
+  const allPartials: PlanChapterTask[] = [];
+  for (const day of plan.days) {
+    for (const task of day.tasks) {
+      if (task.isPartial && task.parentId) {
+        allPartials.push(task);
+      }
+    }
+  }
+
+  // If no partials exist, return unmodified plan
+  if (allPartials.length === 0) {
+    return plan;
+  }
+
+  // Group partials by parentId
+  const partialsByParent = new Map<string, PlanChapterTask[]>();
+  for (const partial of allPartials) {
+    if (!partial.parentId) continue;
+    const list = partialsByParent.get(partial.parentId) || [];
+    list.push(partial);
+    partialsByParent.set(partial.parentId, list);
+  }
+
+  // Update parent tasks across all days
+  const updatedDays = plan.days.map((day) => ({
+    ...day,
+    tasks: day.tasks.map((task) => {
+      const children = partialsByParent.get(task.id);
+      if (!children || children.length === 0) {
+        return task;
+      }
+
+      // Compute total progress
+      const totalPartials = children.length;
+      const completedCount = children.filter((c) => c.completed).length;
+      const sumPercent = children.reduce(
+        (acc, c) => acc + (typeof c.progressPercent === "number" ? c.progressPercent : c.completed ? 100 : 0),
+        0
+      );
+      const computedPercent = Math.round(sumPercent / totalPartials);
+      const isAllDone = completedCount === totalPartials && computedPercent >= 100;
+
+      return {
+        ...task,
+        isSplitParent: true,
+        completed: isAllDone,
+        progressPercent: computedPercent,
+      };
+    }),
+  }));
+
+  return {
+    ...plan,
+    days: updatedDays,
+  };
+}
+
+/**
+ * Splits a task into multiple partial tasks distributed across specified dates
+ */
+export interface PartialTaskDraft {
+  id?: string;
+  date: string; // Target day ISO (YYYY-MM-DD)
+  label?: string; // e.g. "Part 1 (00:00 - 25:00)"
+  splitType: SplitType;
+  timeRange?: TaskTimeRange;
+  topicName?: string;
+  estHours: number;
+  notes?: string;
+}
+
+export function splitTaskIntoPartials(
+  plan: StrategyPlan,
+  parentTaskId: string,
+  partialsDraft: PartialTaskDraft[]
+): StrategyPlan {
+  // Find parent task
+  let parentTask: PlanChapterTask | null = null;
+  for (const day of plan.days) {
+    const found = day.tasks.find((t) => t.id === parentTaskId);
+    if (found) {
+      parentTask = found;
+      break;
+    }
+  }
+
+  if (!parentTask || partialsDraft.length === 0) {
+    return plan;
+  }
+
+  const parentId = parentTask.id;
+  const totalPartials = partialsDraft.length;
+
+  // Mark parent task as isSplitParent
+  let updatedDays = plan.days.map((day) => ({
+    ...day,
+    tasks: day.tasks.map((task) => {
+      if (task.id === parentId) {
+        return {
+          ...task,
+          isSplitParent: true,
+          completed: false,
+          progressPercent: 0,
+        };
+      }
+      return task;
+    }),
+  }));
+
+  // Create partial task items and attach to corresponding target dates
+  partialsDraft.forEach((draft, idx) => {
+    const partialTask: PlanChapterTask = {
+      id: draft.id || `partial_${parentId}_${idx + 1}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      subjectId: parentTask!.subjectId,
+      chapterId: parentTask!.chapterId,
+      chapterName: parentTask!.chapterName,
+      subjectName: parentTask!.subjectName,
+      taskType: parentTask!.taskType,
+      estHours: draft.estHours || Math.max(1, Math.round(parentTask!.estHours / totalPartials)),
+      completed: false,
+      progressPercent: 0,
+      notes: draft.notes || parentTask!.notes,
+      videoUrl: parentTask!.videoUrl,
+      videoTitle: parentTask!.videoTitle,
+      isPartial: true,
+      parentId: parentId,
+      partialIndex: idx + 1,
+      totalPartials: totalPartials,
+      splitType: draft.splitType,
+      timeRange: draft.timeRange,
+      topicName: draft.topicName,
+    };
+
+    // Check if target day exists, else append it
+    const dayExists = updatedDays.some((d) => d.date === draft.date);
+    if (dayExists) {
+      updatedDays = updatedDays.map((d) => {
+        if (d.date === draft.date) {
+          return {
+            ...d,
+            tasks: [...d.tasks, partialTask],
+          };
+        }
+        return d;
+      });
+    } else {
+      updatedDays.push({
+        date: draft.date,
+        dayType: "working",
+        targetStudyHours: 5,
+        tasks: [partialTask],
+      });
+      updatedDays.sort((a, b) => a.date.localeCompare(b.date));
+    }
+  });
+
+  return syncPlanParentProgress({
+    ...plan,
+    days: updatedDays,
+    updatedAt: Date.now(),
+  });
+}
 
 export function loadSavedStrategyPlan(): StrategyPlan {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_PLAN);
     if (raw) {
+      // Rule 3: Keep backup of old data before migration
+      const existingBackup = localStorage.getItem(STORAGE_KEY_BACKUP_V1);
+      if (!existingBackup) {
+        try {
+          localStorage.setItem(STORAGE_KEY_BACKUP_V1, raw);
+        } catch (backupErr) {
+          console.warn("Failed to write backup_v1 to storage", backupErr);
+        }
+      }
+
       const parsed = JSON.parse(raw);
       if (parsed && Array.isArray(parsed.days) && parsed.days.length > 0) {
-        return parsed;
+        const migrated = migratePlanData(parsed);
+        // Persist migrated format
+        saveStrategyPlan(migrated);
+        return migrated;
       }
     }
   } catch (e) {
@@ -1295,19 +1531,73 @@ export function generateAiStrategyPrompt(options: {
       {
         date: start,
         dayType: "working", // "working" (school day ~5h), "holiday" (Sunday/Gazetted ~10h), or "self_leave" (bunk for self study ~8.5h)
-        label: "Orientation & Mechanics Kickoff",
+        label: "Orientation & Electrostatics Kickoff",
         targetStudyHours: 5,
         tasks: [
           {
-            id: `task_${start}_0`,
-            subjectId: "physics", // "physics" | "chemistry" | "mathematics" | "cs" | "english" | "biology"
+            id: `task_${start}_parent_0`,
+            subjectId: "physics",
             chapterId: "phy-1",
             chapterName: "Electric Charges and Fields",
             subjectName: "Physics",
-            taskType: "Theory", // "Theory" | "NCERT Exercises" | "PYQs" | "Revision" | "Sample Paper"
+            taskType: "Theory",
+            estHours: 6,
+            completed: false,
+            notes: "Complete Electrostatics Lecture (Split into Day 1 & Day 2)",
+            videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            videoTitle: "Physics Class 12: Electric Charges and Fields One Shot",
+            isSplitParent: true,
+            progressPercent: 0
+          },
+          {
+            id: `partial_task_${start}_0_1`,
+            subjectId: "physics",
+            chapterId: "phy-1",
+            chapterName: "Electric Charges and Fields",
+            subjectName: "Physics",
+            taskType: "Theory",
             estHours: 3,
             completed: false,
-            notes: "Focus on Gauss Law & Electric Dipole derivations"
+            notes: "Lecture Part 1: Coulomb's Law & Electric Field Lines (00:00 - 45:00)",
+            videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            videoTitle: "Physics Class 12: Electric Charges and Fields One Shot",
+            isPartial: true,
+            parentId: `task_${start}_parent_0`,
+            partialIndex: 1,
+            totalPartials: 2,
+            splitType: "time",
+            timeRange: { startSec: 0, endSec: 2700, label: "00:00 - 45:00" },
+            topicName: "Coulomb's Law & Electric Dipole",
+            progressPercent: 0
+          }
+        ]
+      },
+      {
+        date: addDaysToDate(start, 1),
+        dayType: "working",
+        label: "Gauss Law & PYQs",
+        targetStudyHours: 5,
+        tasks: [
+          {
+            id: `partial_task_${start}_0_2`,
+            subjectId: "physics",
+            chapterId: "phy-1",
+            chapterName: "Electric Charges and Fields",
+            subjectName: "Physics",
+            taskType: "Theory",
+            estHours: 3,
+            completed: false,
+            notes: "Lecture Part 2: Gauss's Law & NCERT Derivations (45:00 - 90:00)",
+            videoUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            videoTitle: "Physics Class 12: Electric Charges and Fields One Shot",
+            isPartial: true,
+            parentId: `task_${start}_parent_0`,
+            partialIndex: 2,
+            totalPartials: 2,
+            splitType: "time",
+            timeRange: { startSec: 2700, endSec: 5400, label: "45:00 - 90:00" },
+            topicName: "Gauss's Theorem & Applications",
+            progressPercent: 0
           }
         ]
       }
@@ -1315,10 +1605,10 @@ export function generateAiStrategyPrompt(options: {
   };
 
   let prompt = `You are an elite CBSE Class 12 Board Examination Strategy Architect and Academic Mentor.
-Your task is to generate a personalized, realistic, high-scoring Datewise Chapter Study Strategy for Class 12th Board examinations.
+Your task is to generate a personalized, realistic, high-scoring Datewise Chapter Study Strategy for Class 12th Board examinations with LECTURE INTEGRATION and PARTIAL TASK SPLITTING.
 
 CRITICAL REQUIREMENT:
-The web app includes a built-in JSON Importer ("Copy Shared Plan" -> Paste JSON or share string).
+The web app includes a built-in JSON Importer ("Copy Shared Plan" -> Paste JSON or share string) and an in-app lecture player.
 You must output a strictly valid, JSON-formatted study plan adhering EXACTLY to the application's schema below, wrapped in a single \`\`\`json code block. Do NOT include markdown outside or syntax errors.
 
 =======================================================
@@ -1330,7 +1620,7 @@ STUDENT PROFILE & CUSTOM REQUIREMENTS:
 • Target Subjects: ${activeSubjectList.map((s) => s.name).join(", ")}
 • Weak Areas / High Priority Focus: ${options.weakSubjects || "Focus extra time on high-weightage chapters and past 10-year board questions"}
 • Specific User Request / Goals:
-"${options.userGoal.trim() || "Create an intensive 95%+ board preparation timetable covering all chapters, NCERT exercises, and PYQs."}"
+"${options.userGoal.trim() || "Create an intensive 95%+ board preparation timetable covering all chapters, NCERT exercises, and PYQs with lecture timestamp splits."}"
 
 =======================================================
 EXACT CBSE CLASS 12 SYLLABUS & CHAPTER LIST:
@@ -1339,24 +1629,22 @@ EXACT CBSE CLASS 12 SYLLABUS & CHAPTER LIST:
 ${syllabusCatalog.trim()}
 
 =======================================================
-ATTENDANCE & DAY-TYPE RULES:
+LECTURE & PARTIAL TASK SPLITTING GUIDELINES:
 =======================================================
-1. Every day in the "days" array MUST have "date" in ISO format (YYYY-MM-DD) sequential from ${start} to ${end}.
-2. "dayType" must be one of:
-   - "working" (School working day: schedule 1 to 2 chapters, targetStudyHours: 4 to 5)
-   - "holiday" (Sunday or Gazetted holiday: high-output day, 2 to 3 chapters, targetStudyHours: 9 to 11)
-   - "self_leave" (Strategic school bunk / preparatory leave for revision: 2 to 3 chapters, targetStudyHours: 8 to 9)
-3. Sundays should automatically have dayType: "holiday".
-4. "tasks": Array of chapter tasks for that specific date. Each task MUST contain exact values:
-   - id: unique string (e.g. "task_2026-10-12_0")
-   - subjectId: "physics" | "chemistry" | "mathematics" | "cs" | "english" | "biology"
-   - chapterId: exact chapter ID from the catalog above (e.g. "phy-1", "chem-2", "math-7")
-   - chapterName: exact chapter name from the catalog above
-   - subjectName: full subject name (e.g. "Physics", "Chemistry", "Mathematics")
-   - taskType: "Theory" | "NCERT Exercises" | "PYQs" | "Revision" | "Sample Paper"
-   - estHours: integer number of hours (1 to 5)
-   - completed: false
-   - notes: concise strategic tips (e.g., "Must solve NCERT Back Exercises Q4-15 & 2023 PYQ")
+1. LECTURE ATTACHMENT: For core chapters, include realistic lecture details:
+   - "videoTitle": descriptive lecture title (e.g. "Physics Wallah Electric Charges One-Shot", "Apni Kaksha Chemistry Marathon")
+   - "videoUrl": YouTube lecture URL or placeholder link (e.g. "https://www.youtube.com/watch?v=sample")
+2. PARTIAL TASK SPLITTING:
+   - For long chapters (>4 hours estimated study), split the chapter across 2 to 3 days!
+   - Mark the parent chapter task with "isSplitParent": true.
+   - For each sub-unit, mark "isPartial": true, "parentId": parent's ID, "partialIndex" (1, 2, ...), "totalPartials", and:
+     - If splitting by lecture duration: "splitType": "time", "timeRange": { "startSec": 0, "endSec": 1800, "label": "00:00 - 30:00" }
+     - If splitting by chapter topic: "splitType": "topic", "topicName": exact topic from syllabus
+3. DAY-WISE DISTRIBUTION & ATTENDANCE:
+   - "working" days (4-5 hours target study): 1 to 2 tasks max.
+   - "holiday" days (Sundays / holidays, 9-11 hours target study): 2 to 3 tasks (ideal for PYQ marathons or 2-part lecture binges).
+   - "self_leave" days (8-9 hours target study): 2 to 3 intensive revision tasks.
+4. Day sequence MUST be contiguous starting from ${start} to ${end}.
 
 =======================================================
 TARGET JSON SCHEMA FORMAT:
@@ -1393,6 +1681,7 @@ INSTRUCTIONS FOR IMPORTING INTO THE APP:
 2. The user will click "Copy Shared Plan" or "Import Plan" in the Strategy Builder web app.
 3. The user will paste this JSON, and the app will instantly render:
    - The interactive datewise calendar & chapter checklist
+   - Day-by-day partial lecture sub-units with independent progress tracking
    - School vs Holiday vs Self-Leave attendance dashboard
    - Real-time remaining stats & backlog tracker!
 

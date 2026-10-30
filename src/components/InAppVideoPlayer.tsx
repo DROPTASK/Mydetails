@@ -11,6 +11,7 @@ import {
   Circle,
   Volume2,
   VolumeX,
+  Volume1,
   Zap,
   Maximize,
   Minimize,
@@ -21,9 +22,8 @@ import {
   RefreshCw,
   ChevronsLeft,
   ChevronsRight,
-  Settings,
 } from "lucide-react";
-import { extractYouTubeVideoId, formatVideoTime } from "../lib/strategyData";
+import { extractYouTubeVideoId, formatVideoTime, getYouTubeThumbnailUrl } from "../lib/strategyData";
 import { sfxClick, sfxSuccess } from "../lib/sound";
 
 declare global {
@@ -43,7 +43,7 @@ interface InAppVideoPlayerProps {
   onClose: () => void;
 }
 
-// Playback speed presets up to 4x (user requested > 2x speed)
+// Playback speed presets up to 4.0x
 const SPEED_PRESETS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
 // Subtitle language options
@@ -67,12 +67,16 @@ export function InAppVideoPlayer({
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [loadedFraction, setLoadedFraction] = useState(0); // Buffer bar fraction (0 to 1)
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [volume, setVolume] = useState<number>(100);
   const [isMuted, setIsMuted] = useState(false);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [showCenterIcon, setShowCenterIcon] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isLiveOrRecorded, setIsLiveOrRecorded] = useState(false);
   const [streamNotice, setStreamNotice] = useState<string | null>(null);
+  const [isPlayerReady, setIsPlayerReady] = useState(false);
 
   // Subtitles / Closed Captions State & Menu
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(false);
@@ -81,6 +85,15 @@ export function InAppVideoPlayer({
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [subtitleToast, setSubtitleToast] = useState<string | null>(null);
   const subtitleToastTimerRef = useRef<any>(null);
+
+  // Real YouTube-Style Scrubber Dragging & Hover State
+  const progressBarRef = useRef<HTMLDivElement | null>(null);
+  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [scrubTime, setScrubTime] = useState(0);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [hoverX, setHoverX] = useState<number | null>(null);
+  const [isHoveringBar, setIsHoveringBar] = useState(false);
+  const isScrubbingRef = useRef(false);
 
   // Side Double-Click Feedback State (-10s / +10s YouTube style)
   const [doubleTapFeedback, setDoubleTapFeedback] = useState<{
@@ -109,10 +122,11 @@ export function InAppVideoPlayer({
     if (hideControlsTimerRef.current) {
       clearTimeout(hideControlsTimerRef.current);
     }
-    if (isPlaying) {
+    if (isPlaying && !isScrubbingRef.current) {
       hideControlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
         setShowSubtitleMenu(false);
+        setShowVolumeSlider(false);
       }, 4000);
     }
   }, [isPlaying]);
@@ -127,7 +141,6 @@ export function InAppVideoPlayer({
   }, [isPlaying, resetHideControlsTimer]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const playerRef = useRef<any>(null);
   const intervalRef = useRef<any>(null);
   const turboIntervalRef = useRef<any>(null);
@@ -164,16 +177,6 @@ export function InAppVideoPlayer({
     };
   }, []);
 
-  // PostMessage helper for IFrame communication
-  const sendCommand = (func: string, args: any[] = []) => {
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: "command", func, args }),
-        "*"
-      );
-    }
-  };
-
   // Trigger toast for subtitles
   const triggerSubtitleToast = (text: string) => {
     setSubtitleToast(text);
@@ -183,49 +186,66 @@ export function InAppVideoPlayer({
     }, 2200);
   };
 
-  // Double-tap rewind 10s with official YouTube ripple animation and accumulation
-  const triggerDoubleTapRewind = () => {
-    sfxClick();
-    const now = Date.now();
-    let nextSec = 10;
-    if (
-      doubleTapFeedback?.side === "left" &&
-      now - lastClickRef.current.time < 800
-    ) {
-      nextSec = (accumulatedSkipRef.current.seconds || 10) + 10;
-    }
-    accumulatedSkipRef.current = { side: "left", seconds: nextSec };
-    seekRelative(-10);
-    setDoubleTapFeedback({ side: "left", seconds: nextSec });
+  // FEATURE 4: Accumulating Skip (+10s, +20s, +30s...) with a 600ms debounce window
+  const skipDebounceTimerRef = useRef<any>(null);
+  const pendingSkipRef = useRef<{
+    side: "left" | "right";
+    seconds: number;
+    baseTime: number;
+  }>({
+    side: "right",
+    seconds: 0,
+    baseTime: 0,
+  });
 
-    if (doubleTapTimerRef.current) clearTimeout(doubleTapTimerRef.current);
-    doubleTapTimerRef.current = setTimeout(() => {
-      setDoubleTapFeedback(null);
-      accumulatedSkipRef.current = { side: "left", seconds: 0 };
-    }, 850);
-  };
+  const handleAccumulatingSkip = useCallback(
+    (direction: "left" | "right") => {
+      sfxClick();
+      resetHideControlsTimer();
 
-  // Double-tap forward 10s with official YouTube ripple animation and accumulation
-  const triggerDoubleTapForward = () => {
-    sfxClick();
-    const now = Date.now();
-    let nextSec = 10;
-    if (
-      doubleTapFeedback?.side === "right" &&
-      now - lastClickRef.current.time < 800
-    ) {
-      nextSec = (accumulatedSkipRef.current.seconds || 10) + 10;
-    }
-    accumulatedSkipRef.current = { side: "right", seconds: nextSec };
-    seekRelative(10);
-    setDoubleTapFeedback({ side: "right", seconds: nextSec });
+      const isScrubbingNow = isScrubbingRef.current;
+      const currentPos = isScrubbingNow ? scrubTime : currentTime;
 
-    if (doubleTapTimerRef.current) clearTimeout(doubleTapTimerRef.current);
-    doubleTapTimerRef.current = setTimeout(() => {
-      setDoubleTapFeedback(null);
-      accumulatedSkipRef.current = { side: "right", seconds: 0 };
-    }, 850);
-  };
+      // If switching direction or starting fresh, initialize base
+      if (pendingSkipRef.current.side !== direction || pendingSkipRef.current.seconds === 0) {
+        pendingSkipRef.current = {
+          side: direction,
+          seconds: 10,
+          baseTime: currentPos,
+        };
+      } else {
+        // Accumulate: 1 tap = 10, 2 taps = 20, 3 taps = 30, and so on
+        pendingSkipRef.current.seconds += 10;
+      }
+
+      const totalSec = pendingSkipRef.current.seconds;
+      setDoubleTapFeedback({ side: direction, seconds: totalSec });
+
+      // Clear debounce timer
+      if (skipDebounceTimerRef.current) {
+        clearTimeout(skipDebounceTimerRef.current);
+      }
+
+      // 600ms debounce window: apply single accumulated seek at the end
+      skipDebounceTimerRef.current = setTimeout(() => {
+        const offset = pendingSkipRef.current.side === "right" ? totalSec : -totalSec;
+        const target = Math.max(0, Math.min(duration > 0 ? duration : 999999, pendingSkipRef.current.baseTime + offset));
+        commitSeek(target);
+
+        // Reset accumulator
+        pendingSkipRef.current = { side: direction, seconds: 0, baseTime: target };
+
+        // Hide on-screen running total badge
+        setTimeout(() => {
+          setDoubleTapFeedback(null);
+        }, 400);
+      }, 600);
+    },
+    [currentTime, duration, scrubTime, resetHideControlsTimer]
+  );
+
+  const triggerDoubleTapRewind = () => handleAccumulatingSkip("left");
+  const triggerDoubleTapForward = () => handleAccumulatingSkip("right");
 
   // Surface click handler: handles single click (play/pause) vs double click (side rewind/forward)
   const handleZoneClick = (
@@ -281,12 +301,6 @@ export function InAppVideoPlayer({
           playerRef.current.setOption("captions", "reload", true);
         }
       } catch {}
-      sendCommand("loadModule", ["captions"]);
-      if (lang !== "default") {
-        sendCommand("setOption", ["captions", "track", { languageCode: lang }]);
-      }
-      sendCommand("setOption", ["captions", "fontSize", fontSizeMap[size]]);
-      sendCommand("setOption", ["captions", "reload", true]);
       const langName = SUBTITLE_LANGUAGES.find((l) => l.code === lang)?.label || lang;
       triggerSubtitleToast(`Subtitles ON (${langName})`);
     } else {
@@ -295,8 +309,6 @@ export function InAppVideoPlayer({
           playerRef.current.unloadModule("captions");
         }
       } catch {}
-      sendCommand("unloadModule", ["captions"]);
-      sendCommand("setOption", ["captions", "track", {}]);
       triggerSubtitleToast("Subtitles Turned OFF");
     }
   };
@@ -337,11 +349,9 @@ export function InAppVideoPlayer({
         playerRef.current.playVideo();
       } catch {}
     }
-    sendCommand("seekTo", [0, true]);
-    sendCommand("playVideo");
   };
 
-  // Keyboard Shortcuts (Space/K = Play/Pause, Left/J = -10s, Right/L = +10s, C = CC, M = Mute, F = Fullscreen)
+  // YouTube Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (
@@ -361,6 +371,12 @@ export function InAppVideoPlayer({
       } else if (e.key === "ArrowRight" || e.key === "l" || e.key === "L") {
         e.preventDefault();
         triggerDoubleTapForward();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        changeVolume(Math.min(100, volume + 10));
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        changeVolume(Math.max(0, volume - 10));
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
         toggleSubtitles();
@@ -370,15 +386,18 @@ export function InAppVideoPlayer({
       } else if (e.key === "f" || e.key === "F") {
         e.preventDefault();
         toggleFullscreen();
+      } else if (e.key >= "0" && e.key <= "9" && duration > 0) {
+        e.preventDefault();
+        const percent = Number(e.key) * 0.1;
+        commitSeek(percent * duration);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, isPlaying, subtitlesEnabled, isMuted, subtitleLang, subtitleSize]);
+  }, [onClose, isPlaying, subtitlesEnabled, isMuted, subtitleLang, subtitleSize, duration, volume]);
 
-  // Dual-Engine Playback Speed Controller: Supports speeds up to 4x!
-  // YouTube natively clamps playbackRate to 2.0x.
-  // For speeds > 2.0x, we play at 2.0x native rate + high-precision smooth micro-leap ticker.
+  // Dual-Engine Playback Speed Controller:
+  // For speeds > 2.0x, runs 2.0x native decode with smooth micro-advancement every 600ms
   useEffect(() => {
     if (turboIntervalRef.current) {
       clearInterval(turboIntervalRef.current);
@@ -386,18 +405,26 @@ export function InAppVideoPlayer({
     }
 
     if (playbackSpeed > 2.0 && isPlaying) {
-      // 250ms interval advances video by the difference: (playbackSpeed - 2.0) * 0.25s
-      const intervalMs = 250;
-      const extraAdvancePerTick = (playbackSpeed - 2.0) * (intervalMs / 1000);
+      const intervalMs = 600;
+      const extraSeconds = (playbackSpeed - 2.0) * (intervalMs / 1000);
 
       turboIntervalRef.current = setInterval(() => {
-        if (playerRef.current && typeof playerRef.current.getCurrentTime === "function") {
+        if (
+          playerRef.current &&
+          typeof playerRef.current.getCurrentTime === "function" &&
+          typeof playerRef.current.getPlayerState === "function"
+        ) {
           try {
-            const cur = playerRef.current.getCurrentTime();
-            if (typeof cur === "number" && cur > 0) {
-              const target = Math.min(duration || 999999, cur + extraAdvancePerTick);
-              playerRef.current.seekTo(target, true);
-              setCurrentTime(target);
+            // Only advance if player is currently playing (state === 1)
+            if (playerRef.current.getPlayerState() === 1) {
+              const cur = playerRef.current.getCurrentTime();
+              if (typeof cur === "number" && cur > 0) {
+                const target = Math.min(duration || 999999, cur + extraSeconds);
+                playerRef.current.seekTo(target, true);
+                if (!isScrubbingRef.current) {
+                  setCurrentTime(target);
+                }
+              }
             }
           } catch {}
         }
@@ -412,13 +439,13 @@ export function InAppVideoPlayer({
     };
   }, [playbackSpeed, isPlaying, duration]);
 
-  // Initialize YouTube Iframe Player
+  // SINGLE-SOURCE PLAYER INITIALIZATION (Eliminates double reload & recorded stream lag)
   useEffect(() => {
     if (!videoId) return;
 
     let destroyed = false;
 
-    // Detect if the original URL was a live stream
+    // Detect if the original URL was a live or recorded stream
     if (videoUrl && /youtube\.com\/live\//i.test(videoUrl)) {
       setIsLiveOrRecorded(true);
     }
@@ -427,16 +454,32 @@ export function InAppVideoPlayer({
       if (destroyed || !window.YT || !window.YT.Player) return;
 
       try {
-        const containerId = `yt-player-${videoId}`;
-        const container = document.getElementById(containerId);
+        const embedId = `yt-player-embed-${videoId}`;
+        const container = document.getElementById(embedId);
         if (!container) return;
 
-        playerRef.current = new window.YT.Player(containerId, {
+        playerRef.current = new window.YT.Player(embedId, {
+          videoId: videoId,
+          width: "100%",
+          height: "100%",
+          playerVars: {
+            autoplay: 1,
+            start: 0,
+            controls: 0,
+            disablekb: 1,
+            fs: 0,
+            modestbranding: 1,
+            rel: 0,
+            iv_load_policy: 3,
+            playsinline: 1,
+            origin: window.location.origin,
+          },
           events: {
             onReady: (event: any) => {
               if (destroyed) return;
+              setIsPlayerReady(true);
               try {
-                // Ensure recorded live streams start from 0:00 as recorded lecture
+                // Ensure recorded stream begins at 0:00 as recorded lecture
                 event.target.seekTo(0, true);
                 event.target.playVideo();
 
@@ -444,7 +487,7 @@ export function InAppVideoPlayer({
                 if (dur && dur > 0) {
                   setDuration(dur);
                 } else {
-                  // If live/recorded stream manifest is still settling, check again in 1s
+                  // Retry duration check after initial handshake
                   setTimeout(() => {
                     try {
                       const d2 = event.target.getDuration();
@@ -453,7 +496,7 @@ export function InAppVideoPlayer({
                   }, 1200);
                 }
 
-                // Apply initial playback speed
+                // Initial playback rate (up to 2x native)
                 const nativeRate = Math.min(2.0, playbackSpeed);
                 event.target.setPlaybackRate(nativeRate);
               } catch {}
@@ -463,7 +506,6 @@ export function InAppVideoPlayer({
               // 1 = playing, 2 = paused, 0 = ended, -1 = unstarted, 3 = buffering
               if (event.data === 1) {
                 setIsPlaying(true);
-                // When playback begins, fetch duration if not yet loaded
                 const dur = event.target.getDuration();
                 if (dur && dur > 0) setDuration(dur);
               } else if (event.data === 2) {
@@ -471,7 +513,6 @@ export function InAppVideoPlayer({
               } else if (event.data === 0) {
                 setIsPlaying(false);
               } else if (event.data === -1 || event.data === 3) {
-                // For recorded live streams, ensure play triggers cleanly
                 try {
                   event.target.playVideo();
                 } catch {}
@@ -485,7 +526,7 @@ export function InAppVideoPlayer({
           },
         });
       } catch (err) {
-        console.warn("YouTube Player initialization fallback:", err);
+        console.warn("YouTube Player initialization error:", err);
       }
     };
 
@@ -506,55 +547,36 @@ export function InAppVideoPlayer({
       initYT();
     }
 
-    // Message listener for YouTube postMessage infoDelivery
-    const handleMessage = (event: MessageEvent) => {
-      if (typeof event.data !== "string") return;
-      try {
-        const data = JSON.parse(event.data);
-        if (data.event === "onReady" || data.event === "initialDelivery") {
-          sendCommand("seekTo", [0, true]);
-          sendCommand("playVideo");
-          sendCommand("getDuration");
-        }
-        if (data.event === "infoDelivery" && data.info) {
-          if (typeof data.info.currentTime === "number") {
-            setCurrentTime(data.info.currentTime);
-          }
-          if (typeof data.info.duration === "number" && data.info.duration > 0) {
-            setDuration(data.info.duration);
-          }
-          if (typeof data.info.playerState === "number") {
-            setIsPlaying(data.info.playerState === 1);
-          }
-        }
-      } catch {}
-    };
-    window.addEventListener("message", handleMessage);
-
-    // Polling interval to track smooth time progress and catch duration updates
+    // Polling interval to track smooth time progress and loaded buffer
     intervalRef.current = setInterval(() => {
       if (playerRef.current && typeof playerRef.current.getCurrentTime === "function") {
         try {
           const cur = playerRef.current.getCurrentTime();
           const dur = playerRef.current.getDuration();
-          if (typeof cur === "number") setCurrentTime(cur);
-          if (typeof dur === "number" && dur > 0) setDuration(dur);
+          const frac = playerRef.current.getVideoLoadedFraction?.() || 0;
+
+          if (typeof cur === "number" && !isScrubbingRef.current) {
+            setCurrentTime(cur);
+          }
+          if (typeof dur === "number" && dur > 0) {
+            setDuration(dur);
+          }
+          if (typeof frac === "number") {
+            setLoadedFraction(Math.min(1, Math.max(0, frac)));
+          }
         } catch {}
-      } else {
-        sendCommand("getCurrentTime");
-        sendCommand("getDuration");
       }
-    }, 350);
+    }, 250);
 
     return () => {
       destroyed = true;
       if (intervalRef.current) clearInterval(intervalRef.current);
       if (turboIntervalRef.current) clearInterval(turboIntervalRef.current);
-      window.removeEventListener("message", handleMessage);
       if (playerRef.current && typeof playerRef.current.destroy === "function") {
         try {
           playerRef.current.destroy();
         } catch {}
+        playerRef.current = null;
       }
     };
   }, [videoId, videoUrl]);
@@ -576,30 +598,25 @@ export function InAppVideoPlayer({
         }
       } catch {}
     }
-    sendCommand(nextState ? "playVideo" : "pauseVideo");
+  };
+
+  const commitSeek = (targetSec: number) => {
+    const clamped = Math.max(0, Math.min(duration || 999999, targetSec));
+    setCurrentTime(clamped);
+    if (playerRef.current && typeof playerRef.current.seekTo === "function") {
+      try {
+        playerRef.current.seekTo(clamped, true);
+        if (isPlaying) {
+          playerRef.current.playVideo();
+        }
+      } catch {}
+    }
   };
 
   const seekRelative = (secondsOffset: number) => {
     sfxClick();
-    const maxBound = duration > 0 ? duration : 999999;
-    const newTarget = Math.max(0, Math.min(maxBound, currentTime + secondsOffset));
-    setCurrentTime(newTarget);
-    if (playerRef.current && typeof playerRef.current.seekTo === "function") {
-      try {
-        playerRef.current.seekTo(newTarget, true);
-      } catch {}
-    }
-    sendCommand("seekTo", [newTarget, true]);
-  };
-
-  const handleSeekSlider = (targetSec: number) => {
-    setCurrentTime(targetSec);
-    if (playerRef.current && typeof playerRef.current.seekTo === "function") {
-      try {
-        playerRef.current.seekTo(targetSec, true);
-      } catch {}
-    }
-    sendCommand("seekTo", [targetSec, true]);
+    const target = currentTime + secondsOffset;
+    commitSeek(target);
   };
 
   // Speed change up to 4.0x
@@ -608,38 +625,130 @@ export function InAppVideoPlayer({
     const clamped = Math.max(0.5, Math.min(4.0, Math.round(speed * 100) / 100));
     setPlaybackSpeed(clamped);
 
-    // YouTube native setPlaybackRate accepts up to 2.0
     const nativeRate = Math.min(2.0, clamped);
     if (playerRef.current && typeof playerRef.current.setPlaybackRate === "function") {
       try {
         playerRef.current.setPlaybackRate(nativeRate);
       } catch {}
     }
-    sendCommand("setPlaybackRate", [nativeRate]);
+  };
+
+  // Volume & Mute control
+  const changeVolume = (val: number) => {
+    const clamped = Math.max(0, Math.min(100, val));
+    setVolume(clamped);
+    if (clamped > 0 && isMuted) {
+      setIsMuted(false);
+      try {
+        playerRef.current?.unMute();
+      } catch {}
+    }
+    if (playerRef.current && typeof playerRef.current.setVolume === "function") {
+      try {
+        playerRef.current.setVolume(clamped);
+      } catch {}
+    }
   };
 
   const toggleMute = () => {
     sfxClick();
     const nextMuted = !isMuted;
     setIsMuted(nextMuted);
-    const func = nextMuted ? "mute" : "unMute";
-    if (playerRef.current && typeof playerRef.current[func] === "function") {
+    if (playerRef.current) {
       try {
-        playerRef.current[func]();
+        if (nextMuted) {
+          playerRef.current.mute();
+        } else {
+          playerRef.current.unMute();
+          playerRef.current.setVolume(volume || 100);
+        }
       } catch {}
     }
-    sendCommand(func);
   };
 
-  // Remaining time calculation adjusted for playback speed (even > 2x)
-  const remainingSeconds = Math.max(0, duration - currentTime);
-  const remainingAtSpeed = playbackSpeed > 0 ? remainingSeconds / playbackSpeed : remainingSeconds;
+  // ==========================================
+  // REAL YOUTUBE SCRUBBER SLIDER IMPLEMENTATION
+  // ==========================================
+  const calculateScrubTarget = (clientX: number): { time: number; percent: number; offsetX: number } => {
+    if (!progressBarRef.current) return { time: 0, percent: 0, offsetX: 0 };
+    const rect = progressBarRef.current.getBoundingClientRect();
+    const offsetX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const percent = rect.width > 0 ? offsetX / rect.width : 0;
+    const time = percent * (duration || 0);
+    return { time, percent, offsetX };
+  };
 
-  // Solid progress bar viewed percentage calculation
-  const progressPercent =
-    duration > 0
-      ? Math.min(100, Math.max(0, (currentTime / duration) * 100))
-      : 0;
+  const handleProgressBarMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resetHideControlsTimer();
+    const { time } = calculateScrubTarget(e.clientX);
+
+    setIsScrubbing(true);
+    isScrubbingRef.current = true;
+    setScrubTime(time);
+    setCurrentTime(time);
+
+    const handleWindowMouseMove = (moveEvent: MouseEvent) => {
+      const { time: newTime } = calculateScrubTarget(moveEvent.clientX);
+      setScrubTime(newTime);
+      setCurrentTime(newTime);
+    };
+
+    const handleWindowMouseUp = (upEvent: MouseEvent) => {
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+      const { time: finalTime } = calculateScrubTarget(upEvent.clientX);
+      setIsScrubbing(false);
+      isScrubbingRef.current = false;
+      commitSeek(finalTime);
+    };
+
+    window.addEventListener("mousemove", handleWindowMouseMove);
+    window.addEventListener("mouseup", handleWindowMouseUp);
+  };
+
+  const handleProgressBarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const { time, offsetX } = calculateScrubTarget(e.clientX);
+    setHoverTime(time);
+    setHoverX(offsetX);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 1) {
+      const { time } = calculateScrubTarget(e.touches[0].clientX);
+      setIsScrubbing(true);
+      isScrubbingRef.current = true;
+      setScrubTime(time);
+      setCurrentTime(time);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 1 && isScrubbingRef.current) {
+      const { time } = calculateScrubTarget(e.touches[0].clientX);
+      setScrubTime(time);
+      setCurrentTime(time);
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (isScrubbingRef.current) {
+      setIsScrubbing(false);
+      isScrubbingRef.current = false;
+      const finalTime = scrubTime;
+      commitSeek(finalTime);
+    }
+  };
+
+  // Scrubber percentage calculations
+  const displayCurrentTime = isScrubbing ? scrubTime : currentTime;
+  const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (displayCurrentTime / duration) * 100)) : 0;
+  const bufferPercent = Math.min(100, Math.max(0, loadedFraction * 100));
+
+  // Remaining time calculation adjusted for playback speed
+  const remainingSeconds = Math.max(0, duration - displayCurrentTime);
+  const remainingAtSpeed = playbackSpeed > 0 ? remainingSeconds / playbackSpeed : remainingSeconds;
 
   return (
     <div
@@ -654,28 +763,36 @@ export function InAppVideoPlayer({
         onMouseDown={resetHideControlsTimer}
         onTouchStart={resetHideControlsTimer}
         onKeyDown={resetHideControlsTimer}
-        className={`w-full bg-zinc-950 border border-zinc-800 overflow-hidden shadow-2xl flex flex-col text-zinc-100 ring-1 ring-white/10 ${
+        className={`w-full bg-black/50 backdrop-blur-2xl border border-white/15 overflow-hidden shadow-2xl flex flex-col text-zinc-100 ring-1 ring-white/10 transform-gpu ${
           isFullscreen
             ? "h-screen w-screen max-w-none max-h-none rounded-none border-0"
             : "max-w-4xl rounded-3xl max-h-[96vh]"
-        } ${!showControls ? "cursor-none" : "cursor-default"}`}
+        } ${!showControls && !isScrubbing ? "cursor-none" : "cursor-default"}`}
         onClick={(e) => {
           e.stopPropagation();
           resetHideControlsTimer();
         }}
       >
-        {/* Minimal Header Bar - auto hides on inactivity */}
+        {/* Minimal Header Bar - auto hides on inactivity with glassmorphism */}
         <div
-          className={`flex items-center justify-between px-4 py-2.5 bg-zinc-900/95 border-b border-zinc-800/80 transition-all duration-300 ease-in-out ${
-            showControls
+          className={`flex items-center justify-between px-4 py-2.5 bg-black/40 backdrop-blur-xl border-b border-white/10 transition-all duration-300 ease-in-out ${
+            showControls || isScrubbing
               ? "opacity-100 translate-y-0"
               : "opacity-0 -translate-y-4 pointer-events-none max-h-0 py-0 border-b-0 overflow-hidden"
           }`}
         >
           <div className="flex items-center gap-2 min-w-0">
             {subjectName && (
-              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-400 border border-blue-500/30 shrink-0">
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 shrink-0">
                 {subjectName}
+              </span>
+            )}
+
+            {/* YouTube Premium Status Badge */}
+            {Boolean(localStorage.getItem("vk_strategy_yt_google_user")) && (
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0 flex items-center gap-1" title="YouTube Premium Google account active">
+                <Zap className="w-2.5 h-2.5 text-amber-400 fill-current" />
+                <span>Premium Active</span>
               </span>
             )}
 
@@ -715,7 +832,7 @@ export function InAppVideoPlayer({
             {isLiveOrRecorded && (
               <button
                 onClick={handleForcePlayRecorded}
-                className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center gap-1 text-[11px] font-semibold backdrop-blur-md"
                 title="Restart recorded stream from 0:00"
               >
                 <RefreshCw className="w-3.5 h-3.5 text-red-400" />
@@ -726,10 +843,10 @@ export function InAppVideoPlayer({
             {/* Subtitles Quick Toggle */}
             <button
               onClick={toggleSubtitles}
-              className={`p-1.5 rounded-xl transition-colors cursor-pointer flex items-center justify-center ${
+              className={`p-1.5 rounded-xl transition-all cursor-pointer flex items-center justify-center backdrop-blur-md ${
                 subtitlesEnabled
-                  ? "bg-red-600 text-white shadow-sm ring-1 ring-red-400"
-                  : "bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white"
+                  ? "bg-red-600/80 text-white shadow-sm ring-1 ring-red-400 border border-red-500/40"
+                  : "bg-white/10 hover:bg-white/20 border border-white/10 text-zinc-300 hover:text-white"
               }`}
               title={subtitlesEnabled ? "Subtitles: ON (Click to turn OFF, or press C)" : "Subtitles: OFF (Click to turn ON, or press C)"}
             >
@@ -742,7 +859,7 @@ export function InAppVideoPlayer({
                 href={videoUrl || `https://www.youtube.com/watch?v=${videoId}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-zinc-300 hover:text-white transition-all cursor-pointer backdrop-blur-md"
                 title="Open directly on YouTube"
               >
                 <ExternalLink className="w-4 h-4" />
@@ -752,7 +869,7 @@ export function InAppVideoPlayer({
             {/* Fullscreen Button */}
             <button
               onClick={toggleFullscreen}
-              className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+              className="p-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-zinc-300 hover:text-white transition-all cursor-pointer backdrop-blur-md"
               title={isFullscreen ? "Exit Fullscreen (F)" : "Enter Fullscreen (F)"}
             >
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
@@ -800,25 +917,32 @@ export function InAppVideoPlayer({
         >
           {videoId ? (
             <>
-              {/* YouTube IFrame Embed (start=0 ensures recorded live stream starts at beginning) */}
-              <iframe
-                ref={iframeRef}
-                id={`yt-player-${videoId}`}
-                src={`https://www.youtube-nocookie.com/embed/${videoId}?enablejsapi=1&autoplay=1&start=0&controls=0&disablekb=1&fs=0&rel=0&modestbranding=1&iv_load_policy=3&playsinline=1`}
-                title={videoTitle || taskName || "Study Lecture"}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                className="w-full h-full border-0 pointer-events-none"
-                onLoad={() => {
-                  sendCommand("listening");
-                  sendCommand("seekTo", [0, true]);
-                  sendCommand("playVideo");
-                  sendCommand("getDuration");
-                }}
+              {/* YouTube IFrame Embed Container */}
+              <div
+                id={`yt-player-embed-${videoId}`}
+                className="w-full h-full pointer-events-none"
               />
+
+              {/* Instant Loading Poster if player is initializing */}
+              {!isPlayerReady && (
+                <div className="absolute inset-0 bg-black flex flex-col items-center justify-center gap-3 z-5">
+                  <img
+                    src={getYouTubeThumbnailUrl(videoId) || ""}
+                    alt="Loading Lecture"
+                    className="absolute inset-0 w-full h-full object-cover opacity-30 filter blur-xs"
+                  />
+                  <div className="relative z-10 flex flex-col items-center gap-2">
+                    <div className="w-12 h-12 rounded-full border-3 border-red-600 border-t-transparent animate-spin" />
+                    <span className="text-xs font-bold text-zinc-300 drop-shadow">
+                      {isLiveOrRecorded ? "Starting Recorded Stream..." : "Loading Lecture..."}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Subtitle Toast Notification */}
               {subtitleToast && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-white/20 text-white text-xs font-semibold shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-white/20 text-white text-xs font-semibold shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95 duration-150 pointer-events-none">
                   <Captions className="w-3.5 h-3.5 text-red-500" />
                   <span>{subtitleToast}</span>
                 </div>
@@ -826,32 +950,38 @@ export function InAppVideoPlayer({
 
               {/* Recorded stream notification */}
               {streamNotice && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-red-600/90 backdrop-blur-md text-white text-xs font-semibold shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-red-600/90 backdrop-blur-md text-white text-xs font-semibold shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95 duration-150 pointer-events-none">
                   <Radio className="w-3.5 h-3.5" />
                   <span>{streamNotice}</span>
                 </div>
               )}
 
-              {/* OFFICIAL YOUTUBE DOUBLE-TAP FEEDBACK: LEFT RIPPLE (-10s) */}
+              {/* OFFICIAL YOUTUBE DOUBLE-TAP ACCUMULATING FEEDBACK: LEFT RIPPLE (-10s, -20s, -30s...) */}
               {doubleTapFeedback?.side === "left" && (
-                <div className="absolute left-0 top-0 bottom-0 w-36 sm:w-48 bg-white/20 backdrop-blur-xs rounded-r-full flex flex-col items-center justify-center text-white pointer-events-none z-20 animate-in fade-in zoom-in-90 duration-150">
+                <div className="absolute left-0 top-0 bottom-0 w-36 sm:w-52 bg-white/10 dark:bg-black/35 backdrop-blur-md border border-l-0 border-white/20 rounded-r-3xl flex flex-col items-center justify-center text-white pointer-events-none z-30 animate-in fade-in zoom-in-95 duration-150 transform-gpu shadow-2xl">
                   <div className="flex items-center gap-0.5 text-white mb-1">
-                    <ChevronsLeft className="w-8 h-8 animate-pulse" />
+                    <ChevronsLeft className="w-9 h-9 animate-pulse drop-shadow" />
                   </div>
-                  <span className="text-xs sm:text-sm font-black tracking-wide drop-shadow">
-                    {doubleTapFeedback.seconds} seconds
+                  <span className="text-base sm:text-lg font-black tracking-wider drop-shadow-md text-white">
+                    -{doubleTapFeedback.seconds}s
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/80 mt-0.5">
+                    Rewind
                   </span>
                 </div>
               )}
 
-              {/* OFFICIAL YOUTUBE DOUBLE-TAP FEEDBACK: RIGHT RIPPLE (+10s) */}
+              {/* OFFICIAL YOUTUBE DOUBLE-TAP ACCUMULATING FEEDBACK: RIGHT RIPPLE (+10s, +20s, +30s...) */}
               {doubleTapFeedback?.side === "right" && (
-                <div className="absolute right-0 top-0 bottom-0 w-36 sm:w-48 bg-white/20 backdrop-blur-xs rounded-l-full flex flex-col items-center justify-center text-white pointer-events-none z-20 animate-in fade-in zoom-in-90 duration-150">
+                <div className="absolute right-0 top-0 bottom-0 w-36 sm:w-52 bg-white/10 dark:bg-black/35 backdrop-blur-md border border-r-0 border-white/20 rounded-l-3xl flex flex-col items-center justify-center text-white pointer-events-none z-30 animate-in fade-in zoom-in-95 duration-150 transform-gpu shadow-2xl">
                   <div className="flex items-center gap-0.5 text-white mb-1">
-                    <ChevronsRight className="w-8 h-8 animate-pulse" />
+                    <ChevronsRight className="w-9 h-9 animate-pulse drop-shadow" />
                   </div>
-                  <span className="text-xs sm:text-sm font-black tracking-wide drop-shadow">
-                    {doubleTapFeedback.seconds} seconds
+                  <span className="text-base sm:text-lg font-black tracking-wider drop-shadow-md text-white">
+                    +{doubleTapFeedback.seconds}s
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-white/80 mt-0.5">
+                    Fast Forward
                   </span>
                 </div>
               )}
@@ -899,10 +1029,10 @@ export function InAppVideoPlayer({
           )}
         </div>
 
-        {/* Minimal Controller HUD - auto-hides after 4s without interaction */}
+        {/* Minimal Controller HUD - auto-hides after 4s without interaction (Translucent Glassmorphism) */}
         <div
-          className={`p-2.5 sm:p-3 bg-zinc-900/95 border-t border-zinc-800/80 space-y-2 transition-all duration-300 ease-in-out relative ${
-            showControls
+          className={`p-2.5 sm:p-3 bg-black/40 backdrop-blur-2xl border-t border-white/10 space-y-2.5 transition-all duration-300 ease-in-out relative ${
+            showControls || isScrubbing
               ? "opacity-100 translate-y-0"
               : "opacity-0 translate-y-4 pointer-events-none max-h-0 py-0 border-t-0 overflow-hidden"
           }`}
@@ -986,12 +1116,13 @@ export function InAppVideoPlayer({
             </div>
           )}
 
-          {/* Progress Slider & Timestamps with SOLID Red Viewed Portion */}
+          {/* REAL YOUTUBE INTERACTIVE SCRUBBER BAR WITH HOVER PREVIEW & BUFFER TRACK */}
           <div className="space-y-1.5">
+            {/* Timestamp Header */}
             <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
               <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
                 <Clock className="w-3.5 h-3.5 text-red-500" />
-                <span>{formatVideoTime(currentTime)}</span>
+                <span>{formatVideoTime(displayCurrentTime)}</span>
                 <span className="text-zinc-600">/</span>
                 <span>{duration > 0 ? formatVideoTime(duration) : isLiveOrRecorded ? "Recorded Lecture" : "--:--"}</span>
               </div>
@@ -1022,74 +1153,139 @@ export function InAppVideoPlayer({
               )}
             </div>
 
-            {/* Custom Progress Bar with 100% SOLID Viewed Part */}
-            <div className="relative w-full h-3 group flex items-center cursor-pointer select-none">
-              {/* Unviewed Solid Background Track */}
-              <div className="w-full h-1.5 group-hover:h-2 bg-zinc-800 rounded-full overflow-hidden transition-all relative">
-                {/* SOLID VIBRANT RED VIEWED PART (100% solid opacity) */}
+            {/* Scrubber Track Container (Thickens on hover/scrub like official YouTube) */}
+            <div
+              ref={progressBarRef}
+              onMouseDown={handleProgressBarMouseDown}
+              onMouseEnter={() => setIsHoveringBar(true)}
+              onMouseLeave={() => {
+                setIsHoveringBar(false);
+                setHoverTime(null);
+                setHoverX(null);
+              }}
+              onMouseMove={handleProgressBarMouseMove}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              className="relative w-full h-4 flex items-center cursor-pointer select-none group"
+            >
+              {/* YouTube Hover Timestamp Tooltip */}
+              {isHoveringBar && hoverX !== null && hoverTime !== null && duration > 0 && (
                 <div
-                  className="h-full bg-red-600 rounded-full transition-[width] duration-75 ease-linear shadow-sm"
+                  className="absolute bottom-5 -translate-x-1/2 px-2 py-0.5 rounded-md bg-black/90 border border-zinc-700 text-white font-mono text-[10px] font-bold shadow-xl pointer-events-none z-30 animate-in fade-in zoom-in-95 duration-100"
+                  style={{ left: `${hoverX}px` }}
+                >
+                  {formatVideoTime(hoverTime)}
+                </div>
+              )}
+
+              {/* Background Track (Expands from 3px to 5px on hover/scrub like real YouTube) */}
+              <div
+                className={`w-full bg-zinc-800 rounded-full overflow-hidden relative transition-all duration-150 ${
+                  isHoveringBar || isScrubbing ? "h-2" : "h-1.5"
+                }`}
+              >
+                {/* 1. Loaded Buffer Bar */}
+                {bufferPercent > 0 && (
+                  <div
+                    className="absolute top-0 bottom-0 left-0 bg-zinc-600/60 rounded-full transition-all duration-300"
+                    style={{ width: `${bufferPercent}%` }}
+                  />
+                )}
+
+                {/* 2. Hover Ghost Bar */}
+                {isHoveringBar && hoverX !== null && progressBarRef.current && (
+                  <div
+                    className="absolute top-0 bottom-0 left-0 bg-white/20 rounded-full"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, (hoverX / progressBarRef.current.clientWidth) * 100))}%`,
+                    }}
+                  />
+                )}
+
+                {/* 3. SOLID RED VIEWED PART (100% solid YouTube Red #EF4444) */}
+                <div
+                  className={`h-full bg-red-600 rounded-full shadow-sm ${
+                    isScrubbing ? "transition-none" : "transition-[width] duration-75 ease-linear"
+                  }`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
 
-              {/* Scrubber thumb circle */}
-              {duration > 0 && (
+              {/* 4. Scrubber Thumb Circle (expands and centers exactly like YouTube) */}
+              {(duration > 0 || isLiveOrRecorded) && (
                 <div
-                  className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-white shadow-md border-2 border-red-600 pointer-events-none transition-transform group-hover:scale-125"
-                  style={{ left: `calc(${progressPercent}% - 7px)` }}
+                  className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full bg-red-600 ring-2 ring-white shadow-lg pointer-events-none transition-transform duration-100 ${
+                    isHoveringBar || isScrubbing ? "w-3.5 h-3.5 scale-125" : "w-3 h-3 scale-100"
+                  }`}
+                  style={{ left: `${progressPercent}%` }}
                 />
               )}
-
-              {/* Accessible Range Input Over the Track */}
-              <input
-                type="range"
-                min={0}
-                max={duration || 100}
-                step={0.1}
-                value={currentTime}
-                onChange={(e) => handleSeekSlider(Number(e.target.value))}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                title="Seek Video"
-              />
             </div>
           </div>
 
           {/* Minimal Controls Bar */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            {/* Play/Pause & Jumps */}
+            {/* Play/Pause, Jumps, Volume & Subtitles */}
             <div className="flex items-center gap-1">
               <button
                 onClick={togglePlayPause}
-                className="w-8 h-8 rounded-xl bg-white text-black font-bold flex items-center justify-center hover:bg-zinc-200 active:scale-95 transition-all cursor-pointer"
+                className="w-8 h-8 rounded-xl bg-white/20 hover:bg-white/30 border border-white/20 text-white font-bold flex items-center justify-center active:scale-95 transition-all cursor-pointer backdrop-blur-md"
                 title={isPlaying ? "Pause (Space)" : "Play (Space)"}
               >
-                {isPlaying ? <Pause className="w-4 h-4 fill-black" /> : <Play className="w-4 h-4 fill-black ml-0.5" />}
+                {isPlaying ? <Pause className="w-4 h-4 fill-white" /> : <Play className="w-4 h-4 fill-white ml-0.5" />}
               </button>
 
               <button
-                onClick={() => seekRelative(-10)}
-                className="w-8 h-8 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                title="Rewind 10s (Left Arrow or Double-Click Left Side)"
+                onClick={() => handleAccumulatingSkip("left")}
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-white flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95"
+                title="Rewind 10s (Repeated taps accumulate: -10s, -20s, -30s...)"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
 
               <button
-                onClick={() => seekRelative(10)}
-                className="w-8 h-8 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                title="Forward 10s (Right Arrow or Double-Click Right Side)"
+                onClick={() => handleAccumulatingSkip("right")}
+                className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-white flex items-center justify-center transition-all cursor-pointer backdrop-blur-md active:scale-95"
+                title="Forward 10s (Repeated taps accumulate: +10s, +20s, +30s...)"
               >
                 <RotateCw className="w-3.5 h-3.5" />
               </button>
 
-              <button
-                onClick={toggleMute}
-                className="w-8 h-8 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white flex items-center justify-center transition-colors ml-0.5 cursor-pointer"
-                title={isMuted ? "Unmute (M)" : "Mute (M)"}
+              {/* Interactive Volume Controller with Expandable Slider */}
+              <div
+                className="relative flex items-center"
+                onMouseEnter={() => setShowVolumeSlider(true)}
+                onMouseLeave={() => setShowVolumeSlider(false)}
               >
-                {isMuted ? <VolumeX className="w-3.5 h-3.5 text-red-400" /> : <Volume2 className="w-3.5 h-3.5" />}
-              </button>
+                <button
+                  onClick={toggleMute}
+                  className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-white flex items-center justify-center transition-all cursor-pointer backdrop-blur-md"
+                  title={isMuted ? "Unmute (M)" : "Mute (M)"}
+                >
+                  {isMuted || volume === 0 ? (
+                    <VolumeX className="w-3.5 h-3.5 text-red-400" />
+                  ) : volume < 50 ? (
+                    <Volume1 className="w-3.5 h-3.5" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+
+                {showVolumeSlider && (
+                  <div className="flex items-center pl-1.5 pr-2 py-1 bg-zinc-850 rounded-xl animate-in fade-in slide-in-from-left-2 duration-150">
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={isMuted ? 0 : volume}
+                      onChange={(e) => changeVolume(Number(e.target.value))}
+                      className="w-16 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-white"
+                      title={`Volume: ${isMuted ? 0 : volume}%`}
+                    />
+                  </div>
+                )}
+              </div>
 
               {/* Subtitle Controls Button in Bar */}
               <div className="relative">
@@ -1107,7 +1303,7 @@ export function InAppVideoPlayer({
               </div>
             </div>
 
-            {/* Speed Controller: Supports speeds up to 4x (Presets & Slider) */}
+            {/* Speed Controller: Supports speeds up to 4.0x */}
             <div className="relative flex items-center gap-1 bg-zinc-950 border border-zinc-800/80 px-1 py-0.5 rounded-xl">
               <span className="text-[10px] font-bold text-zinc-400 px-1 uppercase tracking-wider flex items-center gap-1">
                 <Gauge className={`w-3 h-3 ${playbackSpeed > 2 ? "text-amber-400" : "text-purple-400"}`} />
