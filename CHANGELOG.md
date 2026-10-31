@@ -90,7 +90,18 @@ All notable changes to the 12th Strategy Builder app are documented in this file
   - Allows entering custom site name, URL, and giving a custom logo (via image URL or local file upload).
   - Custom sites display their custom logo on the homepage social bar and can be independently toggled on/off or deleted.
 
+### Feature 11: Strict Display of Admin-Configured Social Links on Homepage
+- **Only Configured Socials Shown**: Updated `SocialLinks.tsx` and `portfolioStorage.ts` so the homepage social bar strictly displays social links that have been explicitly entered and configured in the Admin Socials tab.
+- **Removed Hardcoded Dummy Placeholders**: Removed the unconfigured seed placeholders (`https://wa.me/919999999999`, `https://reddit.com/u/vanshkumar`, etc.) from `DEFAULT_PORTFOLIO_ASSETS` and cleaned legacy dummy URLs from storage so unconfigured platforms start empty and never auto-populate on the homepage.
+- **Admin Input Placeholders**: Changed standard social inputs in Admin to display helpful placeholders (e.g., `https://x.com/yourhandle`) without pre-filling fake usernames.
+- **Configured State Validation (`isConfiguredHomeSocial`)**: Connection links only render on the homepage when:
+  1. A non-empty, genuine URL has been set in the Admin Socials tab.
+  2. The link is not in the legacy dummy seed list.
+  3. The homepage toggle is set to `On Home` (`show_on_home !== false`).
+- **Interactive Feedback**: In the Admin Socials tab, unconfigured social links display "Not Set" and prompt the user with a helpful toast message to enter a URL before toggling homepage visibility.
+
 ### Assumptions & Notes
 - YouTube embeds in modern browsers inherit user authentication and Premium status via active Google sessions in the browser. The in-app Google sign-in records the user's YouTube identity and active session.
 - Pre-shift snapshot is held in React state during the active session for instantaneous Undo; plans are simultaneously persisted to `localStorage`.
 - Available video resolutions depend on the source video uploaded to YouTube and adaptive streaming bandwidth conditions.
+

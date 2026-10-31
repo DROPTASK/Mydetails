@@ -17,6 +17,8 @@ import {
   deletePortfolioAsset,
   toggleAssetShowOnHome,
   saveAssetOverride,
+  isConfiguredHomeSocial,
+  DUMMY_SEED_URLS,
 } from "../lib/portfolioStorage";
 import {
   AdvancedPfp,
@@ -56,19 +58,18 @@ export const STANDARD_SOCIAL_CONFIGS: {
   name: string;
   platform: PlatformId;
   placeholder: string;
-  defaultUrl: string;
 }[] = [
-  { id: "conn-x", name: "Twitter / X", platform: "twitter", placeholder: "https://x.com/username", defaultUrl: "https://x.com/0xUnique_" },
-  { id: "conn-wa", name: "WhatsApp", platform: "whatsapp", placeholder: "https://wa.me/91XXXXXXXXXX", defaultUrl: "https://wa.me/919999999999" },
-  { id: "conn-rd", name: "Reddit", platform: "reddit", placeholder: "https://reddit.com/u/username", defaultUrl: "https://reddit.com/u/vanshkumar" },
-  { id: "conn-tg", name: "Telegram", platform: "telegram", placeholder: "https://t.me/username", defaultUrl: "https://t.me/vanshkumar" },
-  { id: "conn-ig", name: "Instagram", platform: "instagram", placeholder: "https://instagram.com/username", defaultUrl: "https://instagram.com/vansh_kumar" },
-  { id: "conn-gh", name: "GitHub", platform: "github", placeholder: "https://github.com/username", defaultUrl: "https://github.com/DROPTASK" },
-  { id: "conn-li", name: "LinkedIn", platform: "linkedin", placeholder: "https://linkedin.com/in/username", defaultUrl: "https://www.linkedin.com/in/vansh-kumar-bb4981377/" },
-  { id: "conn-yt", name: "YouTube", platform: "youtube", placeholder: "https://youtube.com/@channel", defaultUrl: "https://youtube.com/@vanshkumar" },
-  { id: "conn-dc", name: "Discord", platform: "discord", placeholder: "https://discord.gg/...", defaultUrl: "https://discord.com/" },
-  { id: "conn-sp", name: "Spotify", platform: "spotify", placeholder: "https://open.spotify.com/user/...", defaultUrl: "https://open.spotify.com/user/vanshkumar" },
-  { id: "conn-mail", name: "Email", platform: "mail", placeholder: "mailto:your@email.com", defaultUrl: "mailto:itsme@vanshkumar.in" },
+  { id: "conn-x", name: "Twitter / X", platform: "twitter", placeholder: "https://x.com/yourhandle" },
+  { id: "conn-wa", name: "WhatsApp", platform: "whatsapp", placeholder: "https://wa.me/91XXXXXXXXXX" },
+  { id: "conn-rd", name: "Reddit", platform: "reddit", placeholder: "https://reddit.com/u/yourhandle" },
+  { id: "conn-tg", name: "Telegram", platform: "telegram", placeholder: "https://t.me/yourhandle" },
+  { id: "conn-ig", name: "Instagram", platform: "instagram", placeholder: "https://instagram.com/yourhandle" },
+  { id: "conn-gh", name: "GitHub", platform: "github", placeholder: "https://github.com/yourhandle" },
+  { id: "conn-li", name: "LinkedIn", platform: "linkedin", placeholder: "https://linkedin.com/in/yourhandle" },
+  { id: "conn-yt", name: "YouTube", platform: "youtube", placeholder: "https://youtube.com/@yourchannel" },
+  { id: "conn-dc", name: "Discord", platform: "discord", placeholder: "https://discord.gg/yourinvite" },
+  { id: "conn-sp", name: "Spotify", platform: "spotify", placeholder: "https://open.spotify.com/user/yourhandle" },
+  { id: "conn-mail", name: "Email", platform: "mail", placeholder: "mailto:your@email.com" },
 ];
 
 const TABS = [
@@ -355,11 +356,16 @@ export function Admin() {
   };
 
   const updateSocialUrl = (connId: string, url: string) => {
+    const trimmed = url.trim();
     setAssets((prev) => {
       const idx = prev.findIndex((a) => a.id === connId);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = { ...next[idx], url };
+        next[idx] = {
+          ...next[idx],
+          url,
+          show_on_home: trimmed ? (next[idx].show_on_home !== false) : false,
+        };
         return next;
       }
       const cfg = STANDARD_SOCIAL_CONFIGS.find((c) => c.id === connId);
@@ -373,19 +379,28 @@ export function Admin() {
         favicon_url: null,
         sort_order: Date.now(),
         is_published: true,
-        show_on_home: true,
+        show_on_home: trimmed.length > 0,
         platform: cfg?.platform || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
       return [...prev, newConn];
     });
-    saveAssetOverride(connId, { url });
+    saveAssetOverride(connId, {
+      url,
+      show_on_home: trimmed.length > 0,
+    });
   };
 
   const toggleSocialVisibility = async (connId: string) => {
     sfxClick();
     const existing = assets.find((a) => a.id === connId);
+    const hasUrl = Boolean(existing?.url && existing.url.trim().length > 0 && !DUMMY_SEED_URLS.has(existing.url.trim()));
+    if (!hasUrl) {
+      const cfg = STANDARD_SOCIAL_CONFIGS.find((c) => c.id === connId);
+      showToast(`Please enter a URL for ${cfg?.name || 'this social link'} first`);
+      return;
+    }
     const currentHome = existing?.show_on_home !== false;
     const nextHome = !currentHome;
 
@@ -396,23 +411,7 @@ export function Admin() {
         next[idx] = { ...next[idx], show_on_home: nextHome };
         return next;
       }
-      const cfg = STANDARD_SOCIAL_CONFIGS.find((c) => c.id === connId);
-      const newConn: PortfolioAsset = {
-        id: connId,
-        type: "connection",
-        title: cfg?.name || "Social",
-        description: null,
-        url: cfg?.defaultUrl || "",
-        image_url: null,
-        favicon_url: null,
-        sort_order: Date.now(),
-        is_published: true,
-        show_on_home: nextHome,
-        platform: cfg?.platform || null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      return [...prev, newConn];
+      return prev;
     });
 
     await toggleAssetShowOnHome(connId, nextHome);
@@ -914,13 +913,13 @@ export function Admin() {
                 <h3 className="font-semibold flex items-center gap-2 text-base text-[var(--ink)]">
                   <Share2 className="w-5 h-5 text-[var(--accent)]" /> Social Links & Themed App Logos
                 </h3>
-                <span className="text-xs text-[var(--muted)]">
-                  {assets.filter((a) => a.type === "connection" && a.show_on_home !== false).length} active on Home
+                <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-[var(--surface-2)] text-[var(--muted)] border border-[var(--hairline)]">
+                  {assets.filter(isConfiguredHomeSocial).length} active on Home
                 </span>
               </div>
               <p className="text-xs text-[var(--muted)] leading-relaxed">
-                Enter your profile links below. Toggle which socials appear on your homepage social bar.
-                Socials render directly as authentic <strong>app themed logos</strong> with brand colors and vector glyphs (no badges).
+                Enter your profile links below. Only links configured here and marked as <strong>On Home</strong> appear on your homepage social bar.
+                Socials render directly as authentic <strong>app themed logos</strong> with vector glyphs and brand styles (no badges).
               </p>
             </div>
 
@@ -938,18 +937,29 @@ export function Admin() {
               <div className="space-y-3">
                 {STANDARD_SOCIAL_CONFIGS.map((cfg) => {
                   const asset = assets.find((a) => a.id === cfg.id);
-                  const currentUrl = asset?.url ?? cfg.defaultUrl;
-                  const isShown = asset ? asset.show_on_home !== false : true;
+                  const currentUrl = (asset?.url && !DUMMY_SEED_URLS.has(asset.url.trim())) ? asset.url : "";
+                  const isConfigured = Boolean(currentUrl.trim());
+                  const isShown = isConfigured && (asset ? asset.show_on_home !== false : false);
 
                   return (
                     <div
                       key={cfg.id}
-                      className="surface p-3 sm:p-3.5 rounded-xl border border-[var(--hairline)] flex flex-col sm:flex-row sm:items-center gap-3 transition-all hover:border-[var(--accent)]/30"
+                      className={cn(
+                        "surface p-3 sm:p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center gap-3 transition-all",
+                        isShown
+                          ? "border-[var(--hairline)] hover:border-[var(--accent)]/40"
+                          : "border-[var(--hairline)]/50 opacity-90"
+                      )}
                     >
                       {/* App Themed Logo & Name */}
                       <div className="flex items-center gap-3 sm:w-48 shrink-0">
                         <SocialAppLogo platform={cfg.platform} size="sm" />
-                        <span className="font-semibold text-sm text-[var(--ink)]">{cfg.name}</span>
+                        <div className="min-w-0">
+                          <div className="font-semibold text-sm text-[var(--ink)] truncate">{cfg.name}</div>
+                          <div className="text-[11px] text-[var(--muted)]">
+                            {isConfigured ? (isShown ? "Shown on Home" : "Hidden from Home") : "Not set"}
+                          </div>
+                        </div>
                       </div>
 
                       {/* URL Input Field */}
@@ -970,11 +980,19 @@ export function Admin() {
                           onClick={() => toggleSocialVisibility(cfg.id)}
                           className={cn(
                             "px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border",
-                            isShown
+                            !isConfigured
+                              ? "bg-[var(--surface-2)] text-[var(--muted)] border-[var(--hairline)] hover:text-[var(--ink)] cursor-pointer"
+                              : isShown
                               ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 hover:bg-emerald-500/25"
                               : "bg-[var(--surface-2)] text-[var(--muted)] border-[var(--hairline)] hover:text-[var(--ink)]"
                           )}
-                          title={isShown ? "Currently shown on Home. Click to hide." : "Currently hidden. Click to show on Home."}
+                          title={
+                            !isConfigured
+                              ? "Enter a URL first to enable on Home"
+                              : isShown
+                              ? "Currently shown on Home. Click to hide."
+                              : "Currently hidden. Click to show on Home."
+                          }
                         >
                           {isShown ? (
                             <>
@@ -984,7 +1002,7 @@ export function Admin() {
                           ) : (
                             <>
                               <EyeOff className="w-3.5 h-3.5" />
-                              <span>Hidden</span>
+                              <span>{isConfigured ? "Hidden" : "Not Set"}</span>
                             </>
                           )}
                         </button>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase, type PortfolioAsset } from "../lib/supabase";
-import { loadAllPortfolioAssets } from "../lib/portfolioStorage";
+import { loadAllPortfolioAssets, isConfiguredHomeSocial } from "../lib/portfolioStorage";
 import { SocialAppLogo, detectPlatform } from "../lib/platformThemes";
 import { sfxClick } from "../lib/sound";
 
@@ -10,10 +10,8 @@ export function SocialLinks() {
   const load = async () => {
     try {
       const all = await loadAllPortfolioAssets();
-      // Only show connection links where show_on_home is not false and url has content
-      const connections = all.filter(
-        (a) => a.type === "connection" && a.show_on_home !== false && Boolean(a.url && a.url.trim())
-      );
+      // Only show connection links that are set in the admin socials tab and marked for home
+      const connections = all.filter(isConfiguredHomeSocial);
       setLinks(connections);
     } catch {
       // fallback

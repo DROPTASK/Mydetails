@@ -11,6 +11,30 @@ export function isValidUuid(id: string): boolean {
   return UUID_REGEX.test(id);
 }
 
+export const DUMMY_SEED_URLS = new Set([
+  "https://x.com/0xUnique_",
+  "https://wa.me/919999999999",
+  "https://reddit.com/u/vanshkumar",
+  "https://t.me/vanshkumar",
+  "https://instagram.com/vansh_kumar",
+  "https://www.linkedin.com/in/vansh-kumar-bb4981377/",
+  "https://youtube.com/@vanshkumar",
+  "https://discord.com/",
+  "https://open.spotify.com/user/vanshkumar",
+  "mailto:itsme@vanshkumar.in",
+]);
+
+/**
+ * Checks whether a social asset is legitimately set/configured by the admin and enabled for the homepage.
+ */
+export function isConfiguredHomeSocial(asset: PortfolioAsset): boolean {
+  if (asset.type !== "connection") return false;
+  if (!asset.url || !asset.url.trim()) return false;
+  if (asset.show_on_home === false) return false;
+  if (DUMMY_SEED_URLS.has(asset.url.trim())) return false;
+  return true;
+}
+
 export function getAssetOverrides(): Record<string, Partial<PortfolioAsset>> {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_OVERRIDES);
@@ -168,10 +192,20 @@ export async function loadAllPortfolioAssets(): Promise<PortfolioAsset[]> {
 
   const allAssets = Array.from(itemMap.values())
     .filter((a) => !deletedIds.has(a.id))
-    .map((a) => ({
-      ...a,
-      show_on_home: a.show_on_home !== false,
-    }));
+    .map((a) => {
+      // Clean legacy dummy placeholder URLs on connections so unconfigured socials never appear
+      if (a.type === "connection" && a.url && DUMMY_SEED_URLS.has(a.url.trim())) {
+        return {
+          ...a,
+          url: null,
+          show_on_home: false,
+        };
+      }
+      return {
+        ...a,
+        show_on_home: a.show_on_home !== false,
+      };
+    });
   return allAssets;
 }
 
