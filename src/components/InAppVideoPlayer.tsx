@@ -22,6 +22,7 @@ import {
   RefreshCw,
   ChevronsLeft,
   ChevronsRight,
+  Sliders,
 } from "lucide-react";
 import { extractYouTubeVideoId, formatVideoTime, getYouTubeThumbnailUrl } from "../lib/strategyData";
 import { sfxClick, sfxSuccess } from "../lib/sound";
@@ -52,6 +53,23 @@ const SUBTITLE_LANGUAGES = [
   { code: "hi", label: "Hindi (हिंदी)" },
   { code: "default", label: "Auto / Default" },
 ];
+
+// YouTube video playback quality map and fallback list
+export const QUALITY_MAP: Record<string, { label: string; shortLabel: string; badge?: string }> = {
+  highres: { label: "4320p (8K)", shortLabel: "8K", badge: "UHD" },
+  hd2160: { label: "2160p (4K)", shortLabel: "4K", badge: "UHD" },
+  hd1440: { label: "1440p (2K)", shortLabel: "1440p", badge: "QHD" },
+  hd1080: { label: "1080p (HD)", shortLabel: "1080p", badge: "HD" },
+  hd720: { label: "720p (HD)", shortLabel: "720p", badge: "HD" },
+  large: { label: "480p", shortLabel: "480p" },
+  medium: { label: "360p", shortLabel: "360p" },
+  small: { label: "240p", shortLabel: "240p" },
+  tiny: { label: "144p", shortLabel: "144p" },
+  auto: { label: "Auto (Recommended)", shortLabel: "Auto" },
+  default: { label: "Auto", shortLabel: "Auto" },
+};
+
+const DEFAULT_QUALITIES = ["auto", "hd1080", "hd720", "large", "medium", "small"];
 
 export function InAppVideoPlayer({
   videoUrl,
@@ -85,6 +103,13 @@ export function InAppVideoPlayer({
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [subtitleToast, setSubtitleToast] = useState<string | null>(null);
   const subtitleToastTimerRef = useRef<any>(null);
+
+  // Video Quality Control State & Menu
+  const [playbackQuality, setPlaybackQuality] = useState<string>("auto");
+  const [availableQualities, setAvailableQualities] = useState<string[]>(DEFAULT_QUALITIES);
+  const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [qualityToast, setQualityToast] = useState<string | null>(null);
+  const qualityToastTimerRef = useRef<any>(null);
 
   // Real YouTube-Style Scrubber Dragging & Hover State
   const progressBarRef = useRef<HTMLDivElement | null>(null);
@@ -126,6 +151,7 @@ export function InAppVideoPlayer({
       hideControlsTimerRef.current = setTimeout(() => {
         setShowControls(false);
         setShowSubtitleMenu(false);
+        setShowQualityMenu(false);
         setShowVolumeSlider(false);
       }, 4000);
     }
@@ -184,6 +210,37 @@ export function InAppVideoPlayer({
     subtitleToastTimerRef.current = setTimeout(() => {
       setSubtitleToast(null);
     }, 2200);
+  };
+
+  // Trigger toast for video quality
+  const triggerQualityToast = (text: string) => {
+    setQualityToast(text);
+    if (qualityToastTimerRef.current) clearTimeout(qualityToastTimerRef.current);
+    qualityToastTimerRef.current = setTimeout(() => {
+      setQualityToast(null);
+    }, 2200);
+  };
+
+  const changeQuality = (qualityId: string) => {
+    sfxClick();
+    setPlaybackQuality(qualityId);
+    setShowQualityMenu(false);
+
+    if (playerRef.current) {
+      try {
+        if (typeof playerRef.current.setPlaybackQuality === "function") {
+          playerRef.current.setPlaybackQuality(qualityId);
+        }
+        if (typeof playerRef.current.setPlaybackQualityRange === "function") {
+          playerRef.current.setPlaybackQualityRange(qualityId, qualityId);
+        }
+      } catch (err) {
+        console.warn("Quality change error:", err);
+      }
+    }
+
+    const meta = QUALITY_MAP[qualityId] || { label: qualityId, shortLabel: qualityId };
+    triggerQualityToast(`Quality: ${meta.label}`);
   };
 
   // FEATURE 4: Accumulating Skip (+10s, +20s, +30s...) with a 600ms debounce window
@@ -499,6 +556,19 @@ export function InAppVideoPlayer({
                 // Initial playback rate (up to 2x native)
                 const nativeRate = Math.min(2.0, playbackSpeed);
                 event.target.setPlaybackRate(nativeRate);
+
+                // Initialize video quality levels
+                if (typeof event.target.getAvailableQualityLevels === "function") {
+                  const levels = event.target.getAvailableQualityLevels();
+                  if (Array.isArray(levels) && levels.length > 0) {
+                    const distinct = Array.from(new Set(["auto", ...levels.filter((lvl: string) => lvl !== "default")]));
+                    setAvailableQualities(distinct);
+                  }
+                }
+                if (typeof event.target.getPlaybackQuality === "function") {
+                  const q = event.target.getPlaybackQuality();
+                  if (q && q !== "unknown") setPlaybackQuality(q);
+                }
               } catch {}
             },
             onStateChange: (event: any) => {
@@ -508,6 +578,21 @@ export function InAppVideoPlayer({
                 setIsPlaying(true);
                 const dur = event.target.getDuration();
                 if (dur && dur > 0) setDuration(dur);
+
+                // Refresh available qualities once stream metadata loads
+                try {
+                  if (typeof event.target.getAvailableQualityLevels === "function") {
+                    const levels = event.target.getAvailableQualityLevels();
+                    if (Array.isArray(levels) && levels.length > 0) {
+                      const distinct = Array.from(new Set(["auto", ...levels.filter((lvl: string) => lvl !== "default")]));
+                      setAvailableQualities(distinct);
+                    }
+                  }
+                  if (typeof event.target.getPlaybackQuality === "function") {
+                    const q = event.target.getPlaybackQuality();
+                    if (q && q !== "unknown") setPlaybackQuality(q);
+                  }
+                } catch {}
               } else if (event.data === 2) {
                 setIsPlaying(false);
               } else if (event.data === 0) {
@@ -521,6 +606,15 @@ export function InAppVideoPlayer({
             onPlaybackRateChange: (event: any) => {
               if (!destroyed && event.data && playbackSpeed <= 2) {
                 setPlaybackSpeed(event.data);
+              }
+            },
+            onPlaybackQualityChange: (event: any) => {
+              if (!destroyed && event.data) {
+                setPlaybackQuality(event.data);
+                const meta = QUALITY_MAP[event.data];
+                if (meta) {
+                  triggerQualityToast(`Quality: ${meta.label}`);
+                }
               }
             },
           },
@@ -956,6 +1050,14 @@ export function InAppVideoPlayer({
                 </div>
               )}
 
+              {/* Quality Toast Notification */}
+              {qualityToast && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-3.5 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-white/20 text-white text-xs font-semibold shadow-2xl flex items-center gap-2 animate-in fade-in zoom-in-95 duration-150 pointer-events-none">
+                  <Sliders className="w-3.5 h-3.5 text-purple-400" />
+                  <span>{qualityToast}</span>
+                </div>
+              )}
+
               {/* OFFICIAL YOUTUBE DOUBLE-TAP ACCUMULATING FEEDBACK: LEFT RIPPLE (-10s, -20s, -30s...) */}
               {doubleTapFeedback?.side === "left" && (
                 <div className="absolute left-0 top-0 bottom-0 w-36 sm:w-52 bg-white/10 dark:bg-black/35 backdrop-blur-md border border-l-0 border-white/20 rounded-r-3xl flex flex-col items-center justify-center text-white pointer-events-none z-30 animate-in fade-in zoom-in-95 duration-150 transform-gpu shadow-2xl">
@@ -1112,6 +1214,63 @@ export function InAppVideoPlayer({
                     </button>
                   ))}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Video Playback Quality Controls Popover Menu */}
+          {showQualityMenu && (
+            <div
+              className="absolute bottom-16 right-4 sm:right-28 z-40 bg-zinc-950/90 backdrop-blur-2xl border border-white/15 rounded-2xl p-3 shadow-2xl w-64 space-y-2.5 text-zinc-200 animate-in fade-in slide-in-from-bottom-2 duration-150"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between pb-1.5 border-b border-zinc-800">
+                <span className="text-xs font-bold flex items-center gap-1.5 text-white">
+                  <Sliders className="w-4 h-4 text-purple-400" />
+                  <span>Playback Quality</span>
+                </span>
+                <button
+                  onClick={() => setShowQualityMenu(false)}
+                  className="p-1 rounded-lg hover:bg-white/10 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Quality List */}
+              <div className="space-y-1 max-h-56 overflow-y-auto pr-0.5">
+                {availableQualities.map((q) => {
+                  const meta = QUALITY_MAP[q] || { label: q, shortLabel: q };
+                  const isSelected =
+                    playbackQuality === q ||
+                    (q === "auto" && (playbackQuality === "default" || playbackQuality === "auto"));
+
+                  return (
+                    <button
+                      key={q}
+                      onClick={() => changeQuality(q)}
+                      className={`w-full px-2.5 py-1.5 rounded-xl text-left text-xs transition-all flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? "bg-purple-600/25 text-purple-300 font-bold border border-purple-500/40"
+                          : "hover:bg-white/10 text-zinc-300 hover:text-white"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span>{meta.label}</span>
+                        {meta.badge && (
+                          <span className="text-[9px] font-black tracking-wider px-1 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-400/30">
+                            {meta.badge}
+                          </span>
+                        )}
+                      </div>
+                      {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-purple-400" />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="pt-1.5 border-t border-zinc-800 text-[10px] text-zinc-400 leading-tight">
+                Auto dynamically selects resolution based on network bandwidth and video support.
               </div>
             </div>
           )}
@@ -1290,15 +1449,43 @@ export function InAppVideoPlayer({
               {/* Subtitle Controls Button in Bar */}
               <div className="relative">
                 <button
-                  onClick={() => setShowSubtitleMenu(!showSubtitleMenu)}
+                  onClick={() => {
+                    sfxClick();
+                    setShowSubtitleMenu(!showSubtitleMenu);
+                    setShowQualityMenu(false);
+                  }}
                   className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                     subtitlesEnabled
                       ? "bg-red-600 text-white shadow-sm ring-1 ring-red-400"
-                      : "bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white"
+                      : "bg-white/10 hover:bg-white/20 border border-white/10 text-zinc-300 hover:text-white"
                   }`}
                   title="Subtitle / Caption Controls (C)"
                 >
                   <Captions className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Quality Controls Button in Bar */}
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    sfxClick();
+                    setShowQualityMenu(!showQualityMenu);
+                    setShowSubtitleMenu(false);
+                  }}
+                  className={`h-8 px-2 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer text-xs font-bold backdrop-blur-md ${
+                    showQualityMenu
+                      ? "bg-purple-600 text-white shadow-sm ring-1 ring-purple-400"
+                      : playbackQuality !== "auto" && playbackQuality !== "default"
+                      ? "bg-purple-900/40 border border-purple-500/40 text-purple-300 hover:text-white"
+                      : "bg-white/10 hover:bg-white/20 border border-white/10 text-zinc-300 hover:text-white"
+                  }`}
+                  title="Video Quality (1080p, 720p, 480p, 360p, Auto...)"
+                >
+                  <Sliders className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="text-[10px] uppercase font-mono tracking-wider">
+                    {QUALITY_MAP[playbackQuality]?.shortLabel || "Auto"}
+                  </span>
                 </button>
               </div>
             </div>

@@ -46,6 +46,14 @@ All notable changes to the 12th Strategy Builder app are documented in this file
 - **Lecture-Aware Prompt Generator**: Updated `generateAiStrategyPrompt` with strict JSON schema instructions for AI models (ChatGPT, Claude, Gemini) to include video lecture titles, URLs, and timestamp ranges.
 - **Partial Task Schema Suggestions**: Generates multi-day split plans for heavy chapters (>4 hours or Hard difficulty) specifying `isPartial`, `parentId`, `timeRange`, and `topicName`.
 
+### Feature 7: Video Quality Control in Player
+- **Resolution Selector**: Integrated YouTube IFrame API quality level controls (`getAvailableQualityLevels`, `getPlaybackQuality`, `setPlaybackQuality`).
+- **Support for All Resolutions**: 2160p (4K UHD), 1440p (2K QHD), 1080p (HD), 720p (HD), 480p, 360p, 240p, 144p, and Auto (bandwidth-adaptive).
+- **Glassmorphism Menu**: Added a sleek popover menu accessible from the bottom controller HUD with active quality checkmark badges and dynamic resolution switching.
+- **On-Screen Quality Toast**: Displays immediate translucent toast notification upon quality change (e.g., `Quality: 1080p (HD)`).
+- **HUD Quality Badge**: Added a responsive quality indicator button in the bottom HUD bar showing the active resolution (e.g. `1080P`, `720P`, `AUTO`).
+
 ### Assumptions & Notes
 - YouTube embeds in modern browsers inherit user authentication and Premium status via active Google sessions in the browser. The in-app Google sign-in records the user's YouTube identity and active session.
 - Pre-shift snapshot is held in React state during the active session for instantaneous Undo; plans are simultaneously persisted to `localStorage`.
+- Available video resolutions depend on the source video uploaded to YouTube and adaptive streaming bandwidth conditions.
