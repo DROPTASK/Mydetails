@@ -23,6 +23,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Sliders,
+  Tv,
 } from "lucide-react";
 import { extractYouTubeVideoId, formatVideoTime, getYouTubeThumbnailUrl } from "../lib/strategyData";
 import { sfxClick, sfxSuccess } from "../lib/sound";
@@ -47,7 +48,14 @@ interface InAppVideoPlayerProps {
 // Playback speed presets up to 4.0x
 const SPEED_PRESETS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 
-// Subtitle language options
+export interface CaptionTrack {
+  languageCode: string;
+  languageName: string;
+  kind?: string;
+  vss_id?: string;
+}
+
+// Subtitle language options fallback
 const SUBTITLE_LANGUAGES = [
   { code: "en", label: "English" },
   { code: "hi", label: "Hindi (हिंदी)" },
@@ -101,6 +109,7 @@ export function InAppVideoPlayer({
   const [subtitleLang, setSubtitleLang] = useState("en");
   const [subtitleSize, setSubtitleSize] = useState<"small" | "normal" | "large">("normal");
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
+  const [availableTracks, setAvailableTracks] = useState<CaptionTrack[]>([]);
   const [subtitleToast, setSubtitleToast] = useState<string | null>(null);
   const subtitleToastTimerRef = useRef<any>(null);
 
@@ -110,6 +119,10 @@ export function InAppVideoPlayer({
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [qualityToast, setQualityToast] = useState<string | null>(null);
   const qualityToastTimerRef = useRef<any>(null);
+  const targetQualityRef = useRef<string>("auto");
+
+  // Toggle between Custom HUD & Official Native YouTube Player Controls
+  const [useNativeControls, setUseNativeControls] = useState(false);
 
   // Real YouTube-Style Scrubber Dragging & Hover State
   const progressBarRef = useRef<HTMLDivElement | null>(null);
@@ -226,13 +239,35 @@ export function InAppVideoPlayer({
     setPlaybackQuality(qualityId);
     setShowQualityMenu(false);
 
+    const targetQuality = qualityId === "auto" ? "default" : qualityId;
+    targetQualityRef.current = targetQuality;
+
     if (playerRef.current) {
       try {
+        const curTime =
+          typeof playerRef.current.getCurrentTime === "function"
+            ? playerRef.current.getCurrentTime()
+            : currentTime;
+
+        // 1. Suggest quality directly
         if (typeof playerRef.current.setPlaybackQuality === "function") {
-          playerRef.current.setPlaybackQuality(qualityId);
+          playerRef.current.setPlaybackQuality(targetQuality);
         }
         if (typeof playerRef.current.setPlaybackQualityRange === "function") {
-          playerRef.current.setPlaybackQualityRange(qualityId, qualityId);
+          playerRef.current.setPlaybackQualityRange(targetQuality, targetQuality);
+        }
+
+        // 2. Force stream buffer reload at current timestamp with requested quality
+        if (typeof playerRef.current.loadVideoById === "function") {
+          playerRef.current.loadVideoById({
+            videoId: videoId,
+            startSeconds: curTime || 0,
+            suggestedQuality: targetQuality,
+          });
+
+          // Re-apply playback rate if altered
+          const rate = Math.min(2.0, playbackSpeed);
+          playerRef.current.setPlaybackRate?.(rate);
         }
       } catch (err) {
         console.warn("Quality change error:", err);
@@ -345,28 +380,54 @@ export function InAppVideoPlayer({
   };
 
   // Subtitles Toggle & Configuration
-  const applySubtitleSettings = (enabled: boolean, lang: string, size: "small" | "normal" | "large") => {
+  const applySubtitleSettings = (
+    enabled: boolean,
+    lang: string,
+    size: "small" | "normal" | "large",
+    trackObj?: CaptionTrack
+  ) => {
     const fontSizeMap = { small: 0.75, normal: 1, large: 1.5 };
+    if (!playerRef.current) return;
+
     if (enabled) {
       try {
-        if (playerRef.current && typeof playerRef.current.loadModule === "function") {
+        if (typeof playerRef.current.loadModule === "function") {
           playerRef.current.loadModule("captions");
-          if (lang !== "default") {
-            playerRef.current.setOption("captions", "track", { languageCode: lang });
-          }
+        }
+
+        // Find candidate track from availableTracks
+        const chosenTrack =
+          trackObj ||
+          availableTracks.find(
+            (t) => t.languageCode === lang || t.vss_id === lang
+          ) ||
+          (lang !== "default" ? { languageCode: lang } : availableTracks[0] || { languageCode: "en" });
+
+        if (typeof playerRef.current.setOption === "function") {
+          playerRef.current.setOption("captions", "track", chosenTrack);
           playerRef.current.setOption("captions", "fontSize", fontSizeMap[size]);
           playerRef.current.setOption("captions", "reload", true);
         }
-      } catch {}
-      const langName = SUBTITLE_LANGUAGES.find((l) => l.code === lang)?.label || lang;
+      } catch (err) {
+        console.warn("Error setting subtitles:", err);
+      }
+      const langName =
+        trackObj?.languageName ||
+        availableTracks.find((t) => t.languageCode === lang)?.languageName ||
+        SUBTITLE_LANGUAGES.find((l) => l.code === lang)?.label ||
+        lang;
       triggerSubtitleToast(`Subtitles ON (${langName})`);
     } else {
       try {
-        if (playerRef.current && typeof playerRef.current.unloadModule === "function") {
-          playerRef.current.unloadModule("captions");
+        // Official documented method to turn captions off: setOption("captions", "track", {})
+        if (typeof playerRef.current.setOption === "function") {
+          playerRef.current.setOption("captions", "track", {});
+          playerRef.current.setOption("captions", "reload", true);
         }
-      } catch {}
-      triggerSubtitleToast("Subtitles Turned OFF");
+      } catch (err) {
+        console.warn("Error turning off subtitles:", err);
+      }
+      triggerSubtitleToast("Subtitles OFF");
     }
   };
 
@@ -377,11 +438,11 @@ export function InAppVideoPlayer({
     applySubtitleSettings(nextState, subtitleLang, subtitleSize);
   };
 
-  const setSubtitlesLanguage = (lang: string) => {
+  const setSubtitlesLanguage = (lang: string, trackObj?: CaptionTrack) => {
     sfxClick();
     setSubtitleLang(lang);
     setSubtitlesEnabled(true);
-    applySubtitleSettings(true, lang, subtitleSize);
+    applySubtitleSettings(true, lang, subtitleSize, trackObj);
   };
 
   const setSubtitlesFontSize = (size: "small" | "normal" | "large") => {
@@ -528,6 +589,8 @@ export function InAppVideoPlayer({
             modestbranding: 1,
             rel: 0,
             iv_load_policy: 3,
+            cc_load_policy: 1,
+            cc_lang_pref: "en",
             playsinline: 1,
             origin: window.location.origin,
           },
@@ -557,6 +620,23 @@ export function InAppVideoPlayer({
                 const nativeRate = Math.min(2.0, playbackSpeed);
                 event.target.setPlaybackRate(nativeRate);
 
+                // Initialize captions module & retrieve available tracklist
+                try {
+                  if (typeof event.target.loadModule === "function") {
+                    event.target.loadModule("captions");
+                  }
+                  setTimeout(() => {
+                    try {
+                      if (typeof event.target.getOption === "function") {
+                        const tracks = event.target.getOption("captions", "tracklist");
+                        if (Array.isArray(tracks) && tracks.length > 0) {
+                          setAvailableTracks(tracks);
+                        }
+                      }
+                    } catch {}
+                  }, 500);
+                } catch {}
+
                 // Initialize video quality levels
                 if (typeof event.target.getAvailableQualityLevels === "function") {
                   const levels = event.target.getAvailableQualityLevels();
@@ -579,8 +659,22 @@ export function InAppVideoPlayer({
                 const dur = event.target.getDuration();
                 if (dur && dur > 0) setDuration(dur);
 
-                // Refresh available qualities once stream metadata loads
+                // Enforce custom quality target if selected
+                if (targetQualityRef.current && targetQualityRef.current !== "auto" && targetQualityRef.current !== "default") {
+                  try {
+                    event.target.setPlaybackQuality(targetQualityRef.current);
+                    event.target.setPlaybackQualityRange(targetQualityRef.current, targetQualityRef.current);
+                  } catch {}
+                }
+
+                // Refresh available tracks & qualities once stream metadata loads
                 try {
+                  if (typeof event.target.getOption === "function") {
+                    const tracks = event.target.getOption("captions", "tracklist");
+                    if (Array.isArray(tracks) && tracks.length > 0) {
+                      setAvailableTracks(tracks);
+                    }
+                  }
                   if (typeof event.target.getAvailableQualityLevels === "function") {
                     const levels = event.target.getAvailableQualityLevels();
                     if (Array.isArray(levels) && levels.length > 0) {
@@ -598,6 +692,12 @@ export function InAppVideoPlayer({
               } else if (event.data === 0) {
                 setIsPlaying(false);
               } else if (event.data === -1 || event.data === 3) {
+                if (targetQualityRef.current && targetQualityRef.current !== "auto" && targetQualityRef.current !== "default") {
+                  try {
+                    event.target.setPlaybackQuality(targetQualityRef.current);
+                    event.target.setPlaybackQualityRange(targetQualityRef.current, targetQualityRef.current);
+                  } catch {}
+                }
                 try {
                   event.target.playVideo();
                 } catch {}
@@ -616,6 +716,29 @@ export function InAppVideoPlayer({
                   triggerQualityToast(`Quality: ${meta.label}`);
                 }
               }
+            },
+            onApiChange: (event: any) => {
+              if (destroyed) return;
+              try {
+                if (typeof event.target.getOption === "function") {
+                  const tracks = event.target.getOption("captions", "tracklist");
+                  if (Array.isArray(tracks) && tracks.length > 0) {
+                    setAvailableTracks(tracks);
+                  }
+                  const curTrack = event.target.getOption("captions", "track");
+                  if (curTrack && curTrack.languageCode) {
+                    setSubtitlesEnabled(true);
+                    setSubtitleLang(curTrack.languageCode);
+                  }
+                }
+                if (typeof event.target.getAvailableQualityLevels === "function") {
+                  const levels = event.target.getAvailableQualityLevels();
+                  if (Array.isArray(levels) && levels.length > 0) {
+                    const distinct = Array.from(new Set(["auto", ...levels.filter((lvl: string) => lvl !== "default")]));
+                    setAvailableQualities(distinct);
+                  }
+                }
+              } catch {}
             },
           },
         });
@@ -947,6 +1070,33 @@ export function InAppVideoPlayer({
               {subtitlesEnabled ? <Captions className="w-4 h-4" /> : <CaptionsOff className="w-4 h-4" />}
             </button>
 
+            {/* Native YouTube Controls Toggle */}
+            <button
+              onClick={() => {
+                sfxClick();
+                const next = !useNativeControls;
+                setUseNativeControls(next);
+                if (next) {
+                  triggerQualityToast("Native YouTube Controls enabled (click video gear/CC)");
+                } else {
+                  triggerQualityToast("Custom Player HUD enabled");
+                }
+              }}
+              className={`px-2 py-1.5 rounded-xl transition-all cursor-pointer flex items-center gap-1 text-[11px] font-bold backdrop-blur-md ${
+                useNativeControls
+                  ? "bg-red-600 text-white shadow-sm ring-1 ring-red-400"
+                  : "bg-white/10 hover:bg-white/20 border border-white/10 text-zinc-300 hover:text-white"
+              }`}
+              title={
+                useNativeControls
+                  ? "Native YouTube Controls are active (Click for Custom HUD)"
+                  : "Switch to Official Native YouTube Controls (interactive gear & CC on video)"
+              }
+            >
+              <Tv className="w-3.5 h-3.5 text-red-400" />
+              <span className="hidden sm:inline">{useNativeControls ? "Native YT" : "Native Mode"}</span>
+            </button>
+
             {/* Open on YouTube */}
             {videoId && (
               <a
@@ -1014,7 +1164,7 @@ export function InAppVideoPlayer({
               {/* YouTube IFrame Embed Container */}
               <div
                 id={`yt-player-embed-${videoId}`}
-                className="w-full h-full pointer-events-none"
+                className={`w-full h-full ${useNativeControls ? "pointer-events-auto" : "pointer-events-none"}`}
               />
 
               {/* Instant Loading Poster if player is initializing */}
@@ -1089,39 +1239,41 @@ export function InAppVideoPlayer({
               )}
 
               {/* 3-ZONE TOUCH/CLICK SURFACE (Left: Double-click -10s | Center: Play/Pause | Right: Double-click +10s) */}
-              <div className="absolute inset-0 flex z-10">
-                {/* Left Zone (35%) -> Double Click = -10s */}
-                <div
-                  onClick={(e) => handleZoneClick(e, "left")}
-                  className="w-[35%] h-full cursor-pointer relative"
-                  title="Double click: Rewind 10s | Click: Play/Pause"
-                />
+              {!useNativeControls && (
+                <div className="absolute inset-0 flex z-10">
+                  {/* Left Zone (35%) -> Double Click = -10s */}
+                  <div
+                    onClick={(e) => handleZoneClick(e, "left")}
+                    className="w-[35%] h-full cursor-pointer relative"
+                    title="Double click: Rewind 10s | Click: Play/Pause"
+                  />
 
-                {/* Center Zone (30%) -> Click = Play/Pause */}
-                <div
-                  onClick={(e) => handleZoneClick(e, "center")}
-                  className="w-[30%] h-full cursor-pointer flex items-center justify-center relative"
-                  title="Click: Play/Pause"
-                >
-                  {showCenterIcon && (
-                    <div className="w-16 h-16 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center shadow-2xl animate-in zoom-in-75 duration-200">
-                      {isPlaying ? <Play className="w-8 h-8 fill-white ml-1" /> : <Pause className="w-8 h-8 fill-white" />}
-                    </div>
-                  )}
-                  {!isPlaying && !showCenterIcon && (
-                    <div className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md text-white flex items-center justify-center shadow-2xl hover:scale-110 transition-transform">
-                      <Play className="w-8 h-8 fill-white ml-1" />
-                    </div>
-                  )}
+                  {/* Center Zone (30%) -> Click = Play/Pause */}
+                  <div
+                    onClick={(e) => handleZoneClick(e, "center")}
+                    className="w-[30%] h-full cursor-pointer flex items-center justify-center relative"
+                    title="Click: Play/Pause"
+                  >
+                    {showCenterIcon && (
+                      <div className="w-16 h-16 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center shadow-2xl animate-in zoom-in-75 duration-200">
+                        {isPlaying ? <Play className="w-8 h-8 fill-white ml-1" /> : <Pause className="w-8 h-8 fill-white" />}
+                      </div>
+                    )}
+                    {!isPlaying && !showCenterIcon && (
+                      <div className="w-16 h-16 rounded-full bg-black/70 backdrop-blur-md text-white flex items-center justify-center shadow-2xl hover:scale-110 transition-transform">
+                        <Play className="w-8 h-8 fill-white ml-1" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Zone (35%) -> Double Click = +10s */}
+                  <div
+                    onClick={(e) => handleZoneClick(e, "right")}
+                    className="w-[35%] h-full cursor-pointer relative"
+                    title="Double click: Forward 10s | Click: Play/Pause"
+                  />
                 </div>
-
-                {/* Right Zone (35%) -> Double Click = +10s */}
-                <div
-                  onClick={(e) => handleZoneClick(e, "right")}
-                  className="w-[35%] h-full cursor-pointer relative"
-                  title="Double click: Forward 10s | Click: Play/Pause"
-                />
-              </div>
+              )}
             </>
           ) : (
             <div className="text-center p-6 space-y-1.5 text-zinc-400">
@@ -1175,24 +1327,52 @@ export function InAppVideoPlayer({
 
               {/* Language Selector */}
               <div className="space-y-1">
-                <span className="text-[11px] font-bold text-zinc-400">Language:</span>
-                <div className="grid grid-cols-1 gap-1">
-                  {SUBTITLE_LANGUAGES.map((lang) => (
-                    <button
-                      key={lang.code}
-                      onClick={() => setSubtitlesLanguage(lang.code)}
-                      className={`px-2 py-1 rounded-lg text-left text-xs transition-colors flex items-center justify-between ${
-                        subtitleLang === lang.code && subtitlesEnabled
-                          ? "bg-red-600/20 text-red-400 font-bold border border-red-500/30"
-                          : "hover:bg-zinc-800 text-zinc-300"
-                      }`}
-                    >
-                      <span>{lang.label}</span>
-                      {subtitleLang === lang.code && subtitlesEnabled && (
-                        <CheckCircle2 className="w-3 h-3 text-red-400" />
-                      )}
-                    </button>
-                  ))}
+                <span className="text-[11px] font-bold text-zinc-400">Available Tracks:</span>
+                <div className="grid grid-cols-1 gap-1 max-h-40 overflow-y-auto pr-0.5">
+                  {availableTracks.length > 0 ? (
+                    availableTracks.map((track) => {
+                      const isSelected = subtitleLang === track.languageCode && subtitlesEnabled;
+                      return (
+                        <button
+                          key={track.vss_id || track.languageCode}
+                          onClick={() => setSubtitlesLanguage(track.languageCode, track)}
+                          className={`px-2 py-1.5 rounded-lg text-left text-xs transition-colors flex items-center justify-between cursor-pointer ${
+                            isSelected
+                              ? "bg-red-600/20 text-red-400 font-bold border border-red-500/30"
+                              : "hover:bg-zinc-800 text-zinc-300 hover:text-white"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <span className="truncate">{track.languageName || track.languageCode}</span>
+                            {track.kind === "asr" && (
+                              <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-800 text-zinc-400 font-mono">
+                                Auto
+                              </span>
+                            )}
+                          </div>
+                          {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    SUBTITLE_LANGUAGES.map((lang) => {
+                      const isSelected = subtitleLang === lang.code && subtitlesEnabled;
+                      return (
+                        <button
+                          key={lang.code}
+                          onClick={() => setSubtitlesLanguage(lang.code)}
+                          className={`px-2 py-1.5 rounded-lg text-left text-xs transition-colors flex items-center justify-between cursor-pointer ${
+                            isSelected
+                              ? "bg-red-600/20 text-red-400 font-bold border border-red-500/30"
+                              : "hover:bg-zinc-800 text-zinc-300 hover:text-white"
+                          }`}
+                        >
+                          <span>{lang.label}</span>
+                          {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               </div>
 
@@ -1214,6 +1394,23 @@ export function InAppVideoPlayer({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Native Subtitles Quick Access */}
+              <div className="pt-1.5 border-t border-zinc-800 flex items-center justify-between">
+                <span className="text-[10px] text-zinc-400">Can't see captions?</span>
+                <button
+                  onClick={() => {
+                    sfxClick();
+                    setUseNativeControls(true);
+                    setShowSubtitleMenu(false);
+                    triggerQualityToast("Native Controls enabled (click CC on video)");
+                  }}
+                  className="text-[10px] text-red-400 hover:text-red-300 font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Tv className="w-3 h-3" />
+                  <span>Use Native CC</span>
+                </button>
               </div>
             </div>
           )}
@@ -1269,8 +1466,20 @@ export function InAppVideoPlayer({
                 })}
               </div>
 
-              <div className="pt-1.5 border-t border-zinc-800 text-[10px] text-zinc-400 leading-tight">
-                Auto dynamically selects resolution based on network bandwidth and video support.
+              <div className="pt-1.5 border-t border-zinc-800 flex items-center justify-between">
+                <span className="text-[10px] text-zinc-400 leading-tight">Need exact resolution?</span>
+                <button
+                  onClick={() => {
+                    sfxClick();
+                    setUseNativeControls(true);
+                    setShowQualityMenu(false);
+                    triggerQualityToast("Native Controls enabled (click Gear on video)");
+                  }}
+                  className="text-[10px] text-purple-400 hover:text-purple-300 font-bold flex items-center gap-1 cursor-pointer shrink-0 ml-1"
+                >
+                  <Tv className="w-3 h-3" />
+                  <span>Official Gear</span>
+                </button>
               </div>
             </div>
           )}

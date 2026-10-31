@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { ExternalLink, Sparkles, FolderGit2, ArrowUpRight, CheckCircle2 } from "lucide-react";
 import { supabase, type PortfolioAsset } from "../lib/supabase";
+import { loadAllPortfolioAssets } from "../lib/portfolioStorage";
 import { sfxClick } from "../lib/sound";
 
 const container = { hidden: {}, show: { transition: { staggerChildren: 0.06 } } };
@@ -23,23 +24,42 @@ export function AssetList({
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    let active = true;
+
+    const load = async () => {
+      try {
+        const all = await loadAllPortfolioAssets();
+        if (!active) return;
+        const filtered = all.filter((a) => a.type === type && a.is_published !== false);
+        setItems(filtered);
+      } catch (err) {
+        console.warn("AssetList load error:", err);
+        if (active) setItems([]);
+      } finally {
+        if (active) setReady(true);
+      }
+    };
+
     setReady(false);
-    supabase
-      .from("portfolio_assets")
-      .select("*")
-      .eq("type", type)
-      .eq("is_published", true)
-      .order("sort_order")
-      .then(
-        ({ data }) => {
-          setItems(data || []);
-          setReady(true);
-        },
-        () => {
-          setItems([]);
-          setReady(true);
-        }
-      );
+    load();
+
+    const handleUpdate = () => {
+      load();
+    };
+
+    window.addEventListener("vk_portfolio_assets_updated", handleUpdate);
+    const channel = supabase
+      .channel(`assetlist-live-${type}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "portfolio_assets" }, () => {
+        load();
+      })
+      .subscribe();
+
+    return () => {
+      active = false;
+      window.removeEventListener("vk_portfolio_assets_updated", handleUpdate);
+      supabase.removeChannel(channel);
+    };
   }, [type]);
 
   const isPhoto = type === "photo";

@@ -73,6 +73,8 @@ export type PortfolioAsset = {
   is_published: boolean;
   created_at: string;
   updated_at: string;
+  show_on_home?: boolean;
+  platform?: string | null;
 };
 
 export type BollywoodMovieRecord = {

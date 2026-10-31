@@ -46,12 +46,49 @@ All notable changes to the 12th Strategy Builder app are documented in this file
 - **Lecture-Aware Prompt Generator**: Updated `generateAiStrategyPrompt` with strict JSON schema instructions for AI models (ChatGPT, Claude, Gemini) to include video lecture titles, URLs, and timestamp ranges.
 - **Partial Task Schema Suggestions**: Generates multi-day split plans for heavy chapters (>4 hours or Hard difficulty) specifying `isPartial`, `parentId`, `timeRange`, and `topicName`.
 
-### Feature 7: Video Quality Control in Player
-- **Resolution Selector**: Integrated YouTube IFrame API quality level controls (`getAvailableQualityLevels`, `getPlaybackQuality`, `setPlaybackQuality`).
-- **Support for All Resolutions**: 2160p (4K UHD), 1440p (2K QHD), 1080p (HD), 720p (HD), 480p, 360p, 240p, 144p, and Auto (bandwidth-adaptive).
-- **Glassmorphism Menu**: Added a sleek popover menu accessible from the bottom controller HUD with active quality checkmark badges and dynamic resolution switching.
-- **On-Screen Quality Toast**: Displays immediate translucent toast notification upon quality change (e.g., `Quality: 1080p (HD)`).
-- **HUD Quality Badge**: Added a responsive quality indicator button in the bottom HUD bar showing the active resolution (e.g. `1080P`, `720P`, `AUTO`).
+### Feature 7: Video Quality & Subtitle Control Overhaul
+- **Forced Stream Resolution Switching**: YouTube HTML5 embeds ignore simple `setPlaybackQuality()` calls due to adaptive bitrate (ABR) defaults. Updated quality switching to re-negotiate the stream at the active timestamp using `player.loadVideoById({ videoId, startSeconds, suggestedQuality })` along with `setPlaybackQualityRange`.
+- **Buffering Quality Enforcement**: Hooked into `onStateChange` (Buffering state 3 and Playing state 1) with `targetQualityRef` to continuously enforce selected resolutions.
+- **Dynamic Subtitle Track Detection**: Integrated `player.getOption('captions', 'tracklist')` inside `onApiChange` and `onReady` to detect the actual caption tracks uploaded on the video (e.g., auto-generated English, human English, Hindi).
+- **Official Subtitle Off Specification**: Replaced deprecated/no-op `unloadModule("captions")` with the official YouTube API specification `player.setOption('captions', 'track', {})` and `reload: true` to reliably turn subtitles off.
+- **Native YouTube Mode Toggle**: Added a 1-click "Native Mode" button in the player header and inside both the Quality and Subtitle popovers ("Official Gear" / "Use Native CC") that removes the blocking layer and enables direct interaction with YouTube's official in-player settings gear and CC toggles whenever desired.
+
+### Feature 8: Admin Content Deletion Fix & Homepage Connection DP Avatars
+- **Admin Content Deletion Fix**:
+  - Replaced unawaited Supabase-only delete calls with `deletePortfolioAsset` in `src/lib/portfolioStorage.ts`.
+  - Validates UUIDs prior to issuing Postgres queries, completely preventing PostgreSQL `22P02: invalid input syntax for type uuid` errors on seed items (e.g. `app-1`, `photo-1`).
+  - Persists deleted item IDs in `localStorage` (`vk_deleted_portfolio_asset_ids_v2`) so deleted fallback items never resurrect on page reload or re-render.
+  - Broadcasts cross-tab and cross-component custom event `vk_portfolio_assets_updated` so `AssetList` and `SocialLinks` reflect deletions and additions in real-time.
+  - Added filter tabs (All, Connections, Photos, Apps, Games, Interests), item counts, and confirmation feedback toasts in the Admin panel.
+### Feature 9: Themed Site Logos, Homepage Visibility Toggles & Advanced PFP Avatars
+- **Themed Site Logos & Brand Badges (`platformThemes.tsx`)**:
+  - Engineered vector SVG logos and authentic brand gradient styling for all major platforms: **Twitter / X**, **WhatsApp**, **Reddit**, **Telegram**, **Instagram**, **GitHub**, **LinkedIn**, **YouTube**, **Discord**, **Spotify**, **Threads**, and **Email**.
+  - Built an automatic platform detector (`detectPlatform`) that matches URLs, handles, and titles to their respective platform themes and pre-populates URL prefixes (`https://wa.me/`, `https://x.com/`, `https://reddit.com/u/`, `https://t.me/`, etc.).
+- **Homepage Visibility Toggles in Admin Content Tab**:
+  - Added interactive "Show on Home" / "Hidden" toggle controls directly on each item row in Admin Content (`tab === "assets"`).
+  - Toggling immediately saves overrides persistently across sessions, dispatches `vk_portfolio_assets_updated`, and provides auditory & toast confirmation.
+  - `SocialLinks.tsx` on the homepage dynamically displays only active items where `show_on_home !== false`.
+- **Advanced PFP (Profile Picture / DP) System (`AdvancedPfp`)**:
+  - Implemented multi-layered avatar design featuring:
+    - Platform-specific ambient neon aura glow on hover.
+    - Specular curved glass gloss reflection overlay.
+    - Corner platform badge chip with authentic SVG icon and separation hairline ring.
+    - Graceful fallback to a themed gradient canvas with crisp vector emblem if an avatar photo is not provided or fails to load.
+  - Added live PFP preview in the Admin content creation panel with instant preset auto-fills.
+
+### Feature 10: Pure App Themed Socials & Dedicated Admin Socials Manager
+- **Pure App Themed Social Buttons (`SocialAppLogo`)**:
+  - Removed all avatar profile pictures and corner mini-badges from the homepage social bar.
+  - Socials are now displayed directly with their authentic, crisp **app themed logos** (Twitter / X, WhatsApp, Reddit, Telegram, Instagram, GitHub, LinkedIn, YouTube, Discord, Spotify, Email).
+  - Each icon button features the platform's brand gradient background, authentic SVG vector glyph, and subtle curved glass gloss highlight.
+- **Dedicated Admin Socials Manager**:
+  - Added a dedicated **Socials** tab in the Admin panel navigation with direct input fields for all standard social platforms:
+    - **Twitter / X**, **WhatsApp**, **Reddit**, **Telegram**, **Instagram**, **GitHub**, **LinkedIn**, **YouTube**, **Discord**, **Spotify**, and **Email**.
+    - Each row displays the app-themed logo, input field for the profile URL, and an instant toggle button (`✓ On Home` vs `✕ Hidden`).
+- **Other Sites / Custom Links with Custom Logo Upload**:
+  - Added an "Other Sites & Custom Links" creator below the standard social fields.
+  - Allows entering custom site name, URL, and giving a custom logo (via image URL or local file upload).
+  - Custom sites display their custom logo on the homepage social bar and can be independently toggled on/off or deleted.
 
 ### Assumptions & Notes
 - YouTube embeds in modern browsers inherit user authentication and Premium status via active Google sessions in the browser. The in-app Google sign-in records the user's YouTube identity and active session.

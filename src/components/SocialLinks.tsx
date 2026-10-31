@@ -1,61 +1,53 @@
 import { useEffect, useState } from "react";
-import { Github, Instagram, Linkedin, Youtube, Twitter, MessageCircle, Send, Mail, Globe } from "lucide-react";
 import { supabase, type PortfolioAsset } from "../lib/supabase";
+import { loadAllPortfolioAssets } from "../lib/portfolioStorage";
+import { SocialAppLogo, detectPlatform } from "../lib/platformThemes";
 import { sfxClick } from "../lib/sound";
-
-const DEFAULT_LINKS: { id: string; title: string; url: string }[] = [
-  { id: "def-gh", title: "GitHub", url: "https://github.com/DROPTASK" },
-  { id: "def-x", title: "X (Twitter)", url: "https://x.com/0xUnique_" },
-  { id: "def-li", title: "LinkedIn", url: "https://www.linkedin.com/in/vansh-kumar-bb4981377/" },
-  { id: "def-dc", title: "Discord", url: "https://discord.com/" },
-  { id: "def-mail", title: "Email", url: "mailto:itsme@vanshkumar.in" },
-];
-
-function iconFor(url: string) {
-  const u = url.toLowerCase();
-  if (u.includes("github")) return { Icon: Github, bg: "#181717" };
-  if (u.includes("linkedin")) return { Icon: Linkedin, bg: "#0a66c2" };
-  if (u.includes("instagram")) return { Icon: Instagram, bg: "#e1306c" };
-  if (u.includes("youtube")) return { Icon: Youtube, bg: "#ff0000" };
-  if (u.includes("twitter") || u.includes("x.com")) return { Icon: Twitter, bg: "#000000" };
-  if (u.includes("discord")) return { Icon: MessageCircle, bg: "#5865f2" };
-  if (u.includes("t.me") || u.includes("telegram")) return { Icon: Send, bg: "#26a5e4" };
-  if (u.startsWith("mailto:") || u.includes("@")) return { Icon: Mail, bg: "#6b7280" };
-  return { Icon: Globe, bg: "var(--accent)" };
-}
 
 export function SocialLinks() {
   const [links, setLinks] = useState<PortfolioAsset[]>([]);
 
+  const load = async () => {
+    try {
+      const all = await loadAllPortfolioAssets();
+      // Only show connection links where show_on_home is not false and url has content
+      const connections = all.filter(
+        (a) => a.type === "connection" && a.show_on_home !== false && Boolean(a.url && a.url.trim())
+      );
+      setLinks(connections);
+    } catch {
+      // fallback
+    }
+  };
+
   useEffect(() => {
-    const load = () =>
-      supabase
-        .from("portfolio_assets")
-        .select("*")
-        .eq("type", "connection")
-        .order("sort_order")
-        .then(({ data }) => {
-          if (data && data.length > 0) {
-            setLinks(data);
-          }
-        });
     load();
+
+    const handleAssetsUpdated = () => {
+      load();
+    };
+
+    window.addEventListener("vk_portfolio_assets_updated", handleAssetsUpdated);
+
     const channel = supabase
       .channel("social-links-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "portfolio_assets" }, load)
       .subscribe();
+
     return () => {
+      window.removeEventListener("vk_portfolio_assets_updated", handleAssetsUpdated);
       supabase.removeChannel(channel);
     };
   }, []);
 
-  const displayLinks = links.length > 0 ? links : DEFAULT_LINKS;
+  if (links.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap justify-center gap-2.5">
-      {displayLinks.map((l) => {
+    <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-3.5 py-2">
+      {links.map((l) => {
         if (!l.url) return null;
-        const { Icon, bg } = iconFor(l.url);
+        const theme = detectPlatform(l.url, l.title, l.platform);
+
         return (
           <a
             key={l.id}
@@ -63,11 +55,26 @@ export function SocialLinks() {
             target="_blank"
             rel="noreferrer"
             onClick={sfxClick}
-            title={l.title}
-            className="social-btn transition-transform hover:-translate-y-1 hover:shadow-md"
-            style={{ background: bg }}
+            aria-label={`${l.title || theme.name}`}
+            className="group relative transition-all duration-200 hover:-translate-y-1 active:scale-95"
           >
-            <Icon className="w-[18px] h-[18px]" color="#fff" strokeWidth={2.2} />
+            {/* Direct App Themed Logo (No corner badges) */}
+            <SocialAppLogo
+              platform={l.platform}
+              url={l.url}
+              title={l.title}
+              customLogoUrl={l.image_url}
+              size="md"
+            />
+
+            {/* Clean Hover Floating Tooltip */}
+            <div className="pointer-events-none absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-lg bg-[var(--ink)]/95 backdrop-blur-md px-2.5 py-0.5 text-[11px] font-semibold text-[var(--bg)] opacity-0 shadow-xl transition-all duration-150 group-hover:opacity-100 group-hover:translate-y-0.5 z-30 flex items-center gap-1.5 border border-white/10">
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ background: theme.brandColor }}
+              />
+              <span>{l.title || theme.name}</span>
+            </div>
           </a>
         );
       })}

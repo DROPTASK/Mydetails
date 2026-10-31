@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Lock, Image as ImageIcon, Trash2, Plus, LogOut, Wifi, WifiOff, Music, Clapperboard,
   Search, Star, MessageSquare, Send, ArrowLeft, Mail, Bell, UserCircle2, Upload, Check, Film, Link2, HardDrive,
+  Eye, EyeOff, Sparkles, ExternalLink, Globe, Share2,
 } from "lucide-react";
 import { supabase, type Message, type PortfolioAsset, type FavoriteMovie, type ChatUser, type SiteProfile, type BollywoodMovieRecord } from "../lib/supabase";
 import type { PlaylistTrack } from "../lib/musicStore";
@@ -9,7 +10,22 @@ import { searchMovies, posterUrl, type Movie } from "../lib/tmdb";
 import { searchTracks, upsizeArtwork, type ItunesTrack } from "../lib/itunes";
 import { sendEmail, isEmail } from "../lib/email";
 import { uploadToPortfolioBucket } from "../lib/storage";
-import { sfxToggle } from "../lib/sound";
+import { sfxToggle, sfxClick } from "../lib/sound";
+import {
+  loadAllPortfolioAssets,
+  addPortfolioAsset,
+  deletePortfolioAsset,
+  toggleAssetShowOnHome,
+  saveAssetOverride,
+} from "../lib/portfolioStorage";
+import {
+  AdvancedPfp,
+  SocialAppLogo,
+  ALL_PLATFORMS,
+  detectPlatform,
+  PLATFORM_THEMES,
+  type PlatformId,
+} from "../lib/platformThemes";
 import { cn } from "../lib/utils";
 import { Shortener } from "./Shortener";
 import { Projects } from "./Projects";
@@ -35,8 +51,29 @@ const DEFAULT_PROFILE: SiteProfile = {
   real: { name: "Vansh Kumar", bio: "Indian · Class 12 · Computer Science", avatar_url: null },
 };
 
+export const STANDARD_SOCIAL_CONFIGS: {
+  id: string;
+  name: string;
+  platform: PlatformId;
+  placeholder: string;
+  defaultUrl: string;
+}[] = [
+  { id: "conn-x", name: "Twitter / X", platform: "twitter", placeholder: "https://x.com/username", defaultUrl: "https://x.com/0xUnique_" },
+  { id: "conn-wa", name: "WhatsApp", platform: "whatsapp", placeholder: "https://wa.me/91XXXXXXXXXX", defaultUrl: "https://wa.me/919999999999" },
+  { id: "conn-rd", name: "Reddit", platform: "reddit", placeholder: "https://reddit.com/u/username", defaultUrl: "https://reddit.com/u/vanshkumar" },
+  { id: "conn-tg", name: "Telegram", platform: "telegram", placeholder: "https://t.me/username", defaultUrl: "https://t.me/vanshkumar" },
+  { id: "conn-ig", name: "Instagram", platform: "instagram", placeholder: "https://instagram.com/username", defaultUrl: "https://instagram.com/vansh_kumar" },
+  { id: "conn-gh", name: "GitHub", platform: "github", placeholder: "https://github.com/username", defaultUrl: "https://github.com/DROPTASK" },
+  { id: "conn-li", name: "LinkedIn", platform: "linkedin", placeholder: "https://linkedin.com/in/username", defaultUrl: "https://www.linkedin.com/in/vansh-kumar-bb4981377/" },
+  { id: "conn-yt", name: "YouTube", platform: "youtube", placeholder: "https://youtube.com/@channel", defaultUrl: "https://youtube.com/@vanshkumar" },
+  { id: "conn-dc", name: "Discord", platform: "discord", placeholder: "https://discord.gg/...", defaultUrl: "https://discord.com/" },
+  { id: "conn-sp", name: "Spotify", platform: "spotify", placeholder: "https://open.spotify.com/user/...", defaultUrl: "https://open.spotify.com/user/vanshkumar" },
+  { id: "conn-mail", name: "Email", platform: "mail", placeholder: "mailto:your@email.com", defaultUrl: "mailto:itsme@vanshkumar.in" },
+];
+
 const TABS = [
   { id: "chats" as const, label: "Chats", icon: MessageSquare },
+  { id: "socials" as const, label: "Socials", icon: Share2 },
   { id: "profile" as const, label: "Profile", icon: UserCircle2 },
   { id: "projects" as const, label: "Projects", icon: HardDrive },
   { id: "assets" as const, label: "Content", icon: ImageIcon },
@@ -80,9 +117,45 @@ export function Admin() {
   const onlineFileRef = useRef<HTMLInputElement>(null);
   const realFileRef = useRef<HTMLInputElement>(null);
 
-  const [newAsset, setNewAsset] = useState({ type: "photo", title: "", url: "", image_url: "", description: "" });
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [assetFilter, setAssetFilter] = useState<string>("all");
+  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => {
+      setToastMsg((curr) => (curr === msg ? null : curr));
+    }, 3200);
+  };
+
+  const [newAsset, setNewAsset] = useState<{
+    type: string;
+    title: string;
+    url: string;
+    image_url: string;
+    description: string;
+    show_on_home: boolean;
+    platform: PlatformId;
+  }>({
+    type: "connection",
+    title: "Twitter / X",
+    url: "https://x.com/0xUnique_",
+    image_url: "",
+    description: "",
+    show_on_home: true,
+    platform: "twitter",
+  });
   const [uploadingAsset, setUploadingAsset] = useState(false);
   const assetFileRef = useRef<HTMLInputElement>(null);
+
+  // Other Sites / Custom Links state
+  const [newOtherSite, setNewOtherSite] = useState({
+    title: "",
+    url: "",
+    image_url: "",
+    show_on_home: true,
+  });
+  const [uploadingOtherLogo, setUploadingOtherLogo] = useState(false);
+  const otherLogoFileRef = useRef<HTMLInputElement>(null);
 
   const [movieQuery, setMovieQuery] = useState("");
   const [movieResults, setMovieResults] = useState<Movie[]>([]);
@@ -129,8 +202,12 @@ export function Admin() {
     if (msgs) setMessages(msgs);
     const { data: users } = await supabase.from("chat_users").select("*").order("last_seen", { ascending: false });
     if (users) setChatUsers(users as ChatUser[]);
-    const { data: assts } = await supabase.from("portfolio_assets").select("*").order("sort_order");
-    if (assts) setAssets(assts);
+    try {
+      const assts = await loadAllPortfolioAssets();
+      if (assts) setAssets(assts);
+    } catch (err) {
+      console.warn("Failed to load portfolio assets:", err);
+    }
     const { data: tracks } = await supabase.from("playlist").select("*").order("sort_order");
     if (tracks) setPlaylist(tracks as PlaylistTrack[]);
     const { data: favs } = await supabase.from("favorite_movies").select("*").order("sort_order");
@@ -154,6 +231,12 @@ export function Admin() {
   // Realtime: keep every tab live without needing a manual refresh.
   useEffect(() => {
     if (!authed) return;
+
+    const handleAssetsUpdated = () => {
+      loadAllPortfolioAssets().then((data) => setAssets(data));
+    };
+    window.addEventListener("vk_portfolio_assets_updated", handleAssetsUpdated);
+
     const channel = supabase
       .channel("admin-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "messages" }, () => {
@@ -165,8 +248,7 @@ export function Admin() {
           .then(({ data }) => data && setChatUsers(data as ChatUser[]));
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "portfolio_assets" }, () => {
-        supabase.from("portfolio_assets").select("*").order("sort_order")
-          .then(({ data }) => data && setAssets(data));
+        loadAllPortfolioAssets().then((data) => setAssets(data));
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "playlist" }, () => {
         supabase.from("playlist").select("*").order("sort_order")
@@ -182,6 +264,7 @@ export function Admin() {
       })
       .subscribe();
     return () => {
+      window.removeEventListener("vk_portfolio_assets_updated", handleAssetsUpdated);
       supabase.removeChannel(channel);
     };
   }, [authed]);
@@ -237,17 +320,140 @@ export function Admin() {
   };
 
   const addAsset = async () => {
-    if (!newAsset.title) return;
-    const { data } = await supabase.from("portfolio_assets").insert({
-      type: newAsset.type,
-      title: newAsset.title,
-      url: newAsset.url || null,
-      image_url: newAsset.image_url || null,
-      description: newAsset.description || null,
-    }).select().single();
-    if (data) {
-      setAssets((p) => [...p, data]);
-      setNewAsset({ type: "photo", title: "", url: "", image_url: "", description: "" });
+    if (!newAsset.title.trim()) return;
+    try {
+      sfxClick();
+      const created = await addPortfolioAsset(newAsset);
+      setAssets((p) => [created, ...p.filter((x) => x.id !== created.id)]);
+      setNewAsset((prev) => ({
+        ...prev,
+        title: "",
+        url: "",
+        image_url: "",
+        description: "",
+      }));
+      showToast(`Added "${created.title}" successfully`);
+    } catch (err) {
+      console.error("Failed to add asset:", err);
+      showToast("Failed to add content item");
+    }
+  };
+
+  const toggleShowOnHome = async (asset: PortfolioAsset) => {
+    const nextVal = asset.show_on_home === false ? true : false;
+    try {
+      sfxClick();
+      setAssets((prev) =>
+        prev.map((a) => (a.id === asset.id ? { ...a, show_on_home: nextVal } : a))
+      );
+      await toggleAssetShowOnHome(asset.id, nextVal);
+      showToast(nextVal ? `Showing "${asset.title}" on Homepage` : `Hidden "${asset.title}" from Homepage`);
+    } catch (err) {
+      console.error("Failed to toggle show on home:", err);
+      showToast("Failed to update homepage visibility");
+    }
+  };
+
+  const updateSocialUrl = (connId: string, url: string) => {
+    setAssets((prev) => {
+      const idx = prev.findIndex((a) => a.id === connId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], url };
+        return next;
+      }
+      const cfg = STANDARD_SOCIAL_CONFIGS.find((c) => c.id === connId);
+      const newConn: PortfolioAsset = {
+        id: connId,
+        type: "connection",
+        title: cfg?.name || "Social",
+        description: null,
+        url,
+        image_url: null,
+        favicon_url: null,
+        sort_order: Date.now(),
+        is_published: true,
+        show_on_home: true,
+        platform: cfg?.platform || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      return [...prev, newConn];
+    });
+    saveAssetOverride(connId, { url });
+  };
+
+  const toggleSocialVisibility = async (connId: string) => {
+    sfxClick();
+    const existing = assets.find((a) => a.id === connId);
+    const currentHome = existing?.show_on_home !== false;
+    const nextHome = !currentHome;
+
+    setAssets((prev) => {
+      const idx = prev.findIndex((a) => a.id === connId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], show_on_home: nextHome };
+        return next;
+      }
+      const cfg = STANDARD_SOCIAL_CONFIGS.find((c) => c.id === connId);
+      const newConn: PortfolioAsset = {
+        id: connId,
+        type: "connection",
+        title: cfg?.name || "Social",
+        description: null,
+        url: cfg?.defaultUrl || "",
+        image_url: null,
+        favicon_url: null,
+        sort_order: Date.now(),
+        is_published: true,
+        show_on_home: nextHome,
+        platform: cfg?.platform || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      return [...prev, newConn];
+    });
+
+    await toggleAssetShowOnHome(connId, nextHome);
+    const cfg = STANDARD_SOCIAL_CONFIGS.find((c) => c.id === connId);
+    showToast(nextHome ? `Showing ${cfg?.name || 'social'} on Home` : `Hidden ${cfg?.name || 'social'} from Home`);
+  };
+
+  const addOtherSite = async () => {
+    if (!newOtherSite.title.trim() || !newOtherSite.url.trim()) {
+      showToast("Please enter site title and URL");
+      return;
+    }
+    try {
+      sfxClick();
+      const created = await addPortfolioAsset({
+        type: "connection",
+        title: newOtherSite.title.trim(),
+        url: newOtherSite.url.trim(),
+        image_url: newOtherSite.image_url.trim() || null,
+        show_on_home: newOtherSite.show_on_home,
+        platform: "web",
+      });
+      setAssets((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
+      setNewOtherSite({ title: "", url: "", image_url: "", show_on_home: true });
+      showToast(`Added "${created.title}" with custom logo`);
+    } catch (err) {
+      console.error("Failed to add other site:", err);
+      showToast("Failed to add site");
+    }
+  };
+
+  const uploadOtherLogoImage = async (file: File) => {
+    setUploadingOtherLogo(true);
+    try {
+      const url = await uploadToPortfolioBucket(file, "socials");
+      setNewOtherSite((p) => ({ ...p, image_url: url }));
+      showToast("Uploaded site logo successfully!");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Upload failed — check storage bucket.");
+    } finally {
+      setUploadingOtherLogo(false);
     }
   };
 
@@ -381,21 +587,49 @@ export function Admin() {
     }
   };
 
-  const deleteAsset = (id: string) => {
-    supabase.from("portfolio_assets").delete().eq("id", id);
-    setAssets((p) => p.filter((x) => x.id !== id));
+  const deleteAsset = async (id: string, title?: string) => {
+    try {
+      sfxClick();
+      setDeletingAssetId(id);
+      setAssets((p) => p.filter((x) => x.id !== id));
+      await deletePortfolioAsset(id);
+      showToast(`Deleted "${title || "content item"}" permanently`);
+    } catch (err) {
+      console.error("Failed to delete asset:", err);
+      showToast("Failed to delete item");
+    } finally {
+      setDeletingAssetId(null);
+    }
   };
-  const deleteTrack = (id: string) => {
-    supabase.from("playlist").delete().eq("id", id);
-    setPlaylist((p) => p.filter((x) => x.id !== id));
+  const deleteTrack = async (id: string, title?: string) => {
+    try {
+      sfxClick();
+      setPlaylist((p) => p.filter((x) => x.id !== id));
+      await supabase.from("playlist").delete().eq("id", id);
+      showToast(`Removed "${title || "track"}"`);
+    } catch (err) {
+      console.error("Failed to delete track:", err);
+    }
   };
-  const deleteFavMovie = (id: string) => {
-    supabase.from("favorite_movies").delete().eq("id", id);
-    setFavMovies((p) => p.filter((x) => x.id !== id));
+  const deleteFavMovie = async (id: string, title?: string) => {
+    try {
+      sfxClick();
+      setFavMovies((p) => p.filter((x) => x.id !== id));
+      await supabase.from("favorite_movies").delete().eq("id", id);
+      showToast(`Removed "${title || "movie"}"`);
+    } catch (err) {
+      console.error("Failed to delete movie:", err);
+    }
   };
-  const deleteBollywoodMovie = (id: number) => {
-    supabase.from("bollywood_movies").delete().eq("id", id);
-    setBollywoodList((p) => p.filter((x) => x.id !== id));
+  const deleteBollywoodMovie = async (id: number, title?: string) => {
+    try {
+      sfxClick();
+      setBollywoodList((p) => p.filter((x) => x.id !== id));
+      await supabase.from("bollywood_movies").delete().eq("id", id);
+      showToast(`Removed "${title || "Bollywood movie"}"`);
+    } catch (err) {
+      console.error("Failed to delete Bollywood movie:", err);
+    }
   };
   const addBollywoodMovie = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -672,46 +906,699 @@ export function Admin() {
           </div>
         )}
 
+        {tab === "socials" && (
+          <div className="space-y-6">
+            {/* Header */}
+            <div className="surface-elevated p-5 space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold flex items-center gap-2 text-base text-[var(--ink)]">
+                  <Share2 className="w-5 h-5 text-[var(--accent)]" /> Social Links & Themed App Logos
+                </h3>
+                <span className="text-xs text-[var(--muted)]">
+                  {assets.filter((a) => a.type === "connection" && a.show_on_home !== false).length} active on Home
+                </span>
+              </div>
+              <p className="text-xs text-[var(--muted)] leading-relaxed">
+                Enter your profile links below. Toggle which socials appear on your homepage social bar.
+                Socials render directly as authentic <strong>app themed logos</strong> with brand colors and vector glyphs (no badges).
+              </p>
+            </div>
+
+            {/* Standard Social Links Form */}
+            <div className="surface-elevated p-5 space-y-3.5">
+              <div className="flex items-center justify-between pb-2 border-b border-[var(--hairline)]">
+                <span className="text-xs font-bold uppercase tracking-wider text-[var(--muted)]">
+                  Standard Social Platforms
+                </span>
+                <span className="text-xs text-[var(--muted)]">
+                  Link & Visibility
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {STANDARD_SOCIAL_CONFIGS.map((cfg) => {
+                  const asset = assets.find((a) => a.id === cfg.id);
+                  const currentUrl = asset?.url ?? cfg.defaultUrl;
+                  const isShown = asset ? asset.show_on_home !== false : true;
+
+                  return (
+                    <div
+                      key={cfg.id}
+                      className="surface p-3 sm:p-3.5 rounded-xl border border-[var(--hairline)] flex flex-col sm:flex-row sm:items-center gap-3 transition-all hover:border-[var(--accent)]/30"
+                    >
+                      {/* App Themed Logo & Name */}
+                      <div className="flex items-center gap-3 sm:w-48 shrink-0">
+                        <SocialAppLogo platform={cfg.platform} size="sm" />
+                        <span className="font-semibold text-sm text-[var(--ink)]">{cfg.name}</span>
+                      </div>
+
+                      {/* URL Input Field */}
+                      <div className="flex-1 min-w-0">
+                        <input
+                          type="text"
+                          value={currentUrl}
+                          onChange={(e) => updateSocialUrl(cfg.id, e.target.value)}
+                          placeholder={cfg.placeholder}
+                          className="field w-full text-xs font-mono py-2"
+                        />
+                      </div>
+
+                      {/* Visibility Toggle Button */}
+                      <div className="flex items-center justify-end shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => toggleSocialVisibility(cfg.id)}
+                          className={cn(
+                            "px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border",
+                            isShown
+                              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 hover:bg-emerald-500/25"
+                              : "bg-[var(--surface-2)] text-[var(--muted)] border-[var(--hairline)] hover:text-[var(--ink)]"
+                          )}
+                          title={isShown ? "Currently shown on Home. Click to hide." : "Currently hidden. Click to show on Home."}
+                        >
+                          {isShown ? (
+                            <>
+                              <Eye className="w-3.5 h-3.5 text-emerald-500" />
+                              <span>On Home</span>
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="w-3.5 h-3.5" />
+                              <span>Hidden</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Other Sites / Custom Links Section (Where user gives logo) */}
+            <div className="surface-elevated p-5 space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-[var(--hairline)]">
+                <div>
+                  <h4 className="font-semibold text-sm text-[var(--ink)] flex items-center gap-2">
+                    <Globe className="w-4 h-4 text-[var(--accent)]" /> Other Sites & Custom Links
+                  </h4>
+                  <p className="text-xs text-[var(--muted)] mt-0.5">
+                    Add any other site where you provide your own custom logo (e.g. Substack, Twitch, Behance, Portfolio).
+                  </p>
+                </div>
+              </div>
+
+              {/* Add Other Site Form */}
+              <div className="p-4 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)] space-y-3">
+                <div className="text-xs font-bold uppercase tracking-wider text-[var(--muted)]">
+                  Add New Site with Logo
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-[var(--muted)]">Site Name</label>
+                    <input
+                      placeholder="e.g. My Blog, Substack, Twitch"
+                      value={newOtherSite.title}
+                      onChange={(e) => setNewOtherSite((p) => ({ ...p, title: e.target.value }))}
+                      className="field"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-[var(--muted)]">Site URL</label>
+                    <input
+                      placeholder="https://example.com"
+                      value={newOtherSite.url}
+                      onChange={(e) => setNewOtherSite((p) => ({ ...p, url: e.target.value }))}
+                      className="field"
+                    />
+                  </div>
+                </div>
+
+                {/* Logo section */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-[var(--muted)]">Site Logo (Image URL or Upload)</label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      placeholder="Logo URL (e.g. https://.../logo.png or SVG)"
+                      value={newOtherSite.image_url}
+                      onChange={(e) => setNewOtherSite((p) => ({ ...p, image_url: e.target.value }))}
+                      className="field flex-1"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => otherLogoFileRef.current?.click()}
+                      disabled={uploadingOtherLogo}
+                      className="btn btn-secondary px-3 py-2.5 shrink-0"
+                      title="Upload logo file from computer"
+                    >
+                      <Upload className="w-4 h-4" /> {uploadingOtherLogo ? "…" : "Upload Logo"}
+                    </button>
+                    <input
+                      ref={otherLogoFileRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) uploadOtherLogoImage(file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Preview & Submit */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-2 border-t border-[var(--hairline)]">
+                  <div className="flex items-center gap-3">
+                    <SocialAppLogo
+                      customLogoUrl={newOtherSite.image_url}
+                      title={newOtherSite.title || "Custom Site"}
+                      url={newOtherSite.url}
+                      size="sm"
+                    />
+                    <div className="text-xs text-[var(--muted)]">
+                      {newOtherSite.image_url ? "Custom logo preview" : "Default web glyph preview"}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => setNewOtherSite((p) => ({ ...p, show_on_home: !p.show_on_home }))}
+                      className={cn(
+                        "px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 border transition-all",
+                        newOtherSite.show_on_home
+                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/25"
+                          : "bg-[var(--surface)] text-[var(--muted)] border-[var(--hairline)]"
+                      )}
+                    >
+                      {newOtherSite.show_on_home ? <Eye className="w-3.5 h-3.5 text-emerald-500" /> : <EyeOff className="w-3.5 h-3.5" />}
+                      <span>{newOtherSite.show_on_home ? "On Home" : "Hidden"}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={addOtherSite}
+                      disabled={!newOtherSite.title.trim() || !newOtherSite.url.trim()}
+                      className="btn btn-primary px-4 py-1.5 text-xs font-semibold flex items-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4" /> Add Site
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* List of Custom / Other Sites */}
+              <div className="space-y-2">
+                <div className="text-xs font-bold uppercase tracking-wider text-[var(--muted)] pt-1">
+                  Added Other Sites ({assets.filter((a) => a.type === "connection" && !STANDARD_SOCIAL_CONFIGS.some((cfg) => cfg.id === a.id)).length})
+                </div>
+
+                {assets.filter((a) => a.type === "connection" && !STANDARD_SOCIAL_CONFIGS.some((cfg) => cfg.id === a.id)).length === 0 ? (
+                  <div className="surface p-5 text-center text-xs text-[var(--muted)]">
+                    No custom other sites added yet. Add your personal blogs, projects, or other platforms above.
+                  </div>
+                ) : (
+                  assets
+                    .filter((a) => a.type === "connection" && !STANDARD_SOCIAL_CONFIGS.some((cfg) => cfg.id === a.id))
+                    .map((site) => {
+                      const isShown = site.show_on_home !== false;
+                      const isDeleting = deletingAssetId === site.id;
+
+                      return (
+                        <div
+                          key={site.id}
+                          className={cn(
+                            "surface p-3 rounded-xl border border-[var(--hairline)] flex items-center justify-between gap-3 transition-all",
+                            isDeleting && "opacity-40 pointer-events-none scale-98"
+                          )}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <SocialAppLogo
+                              customLogoUrl={site.image_url}
+                              title={site.title}
+                              url={site.url}
+                              size="sm"
+                            />
+                            <div className="min-w-0">
+                              <div className="font-semibold text-xs text-[var(--ink)] truncate">{site.title}</div>
+                              <div className="text-[11px] text-[var(--accent)] truncate">{site.url}</div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleShowOnHome(site)}
+                              className={cn(
+                                "px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 border",
+                                isShown
+                                  ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/25"
+                                  : "bg-[var(--surface-2)] text-[var(--muted)] border-[var(--hairline)]"
+                              )}
+                            >
+                              {isShown ? <Eye className="w-3.5 h-3.5 text-emerald-500" /> : <EyeOff className="w-3.5 h-3.5" />}
+                              <span>{isShown ? "On Home" : "Hidden"}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => deleteAsset(site.id, site.title)}
+                              disabled={isDeleting}
+                              className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/10 transition-colors"
+                              title="Delete site"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === "assets" && (
           <div className="space-y-4">
-            <div className="surface-elevated p-5 space-y-2">
-              <h3 className="font-semibold flex items-center gap-2 text-sm"><Plus className="w-4 h-4" /> Add content</h3>
-              <select value={newAsset.type} onChange={(e) => setNewAsset((p) => ({ ...p, type: e.target.value }))} className="field">
-                <option value="photo">Photo (gallery)</option>
-                <option value="app">App</option>
-                <option value="game">Game (loved games)</option>
-                <option value="connection">Link / contact / social</option>
-                <option value="link">Interest</option>
-              </select>
-              <input placeholder="Title" value={newAsset.title} onChange={(e) => setNewAsset((p) => ({ ...p, title: e.target.value }))} className="field" />
-              <input placeholder="Description" value={newAsset.description} onChange={(e) => setNewAsset((p) => ({ ...p, description: e.target.value }))} className="field" />
-              <input placeholder="URL" value={newAsset.url} onChange={(e) => setNewAsset((p) => ({ ...p, url: e.target.value }))} className="field" />
-              <div className="flex gap-2 items-center">
-                <input placeholder="Image URL" value={newAsset.image_url} onChange={(e) => setNewAsset((p) => ({ ...p, image_url: e.target.value }))} className="field flex-1" />
-                <button onClick={() => assetFileRef.current?.click()} disabled={uploadingAsset} className="btn btn-secondary px-3 py-2.5 shrink-0">
-                  <Upload className="w-4 h-4" /> {uploadingAsset ? "…" : "Upload"}
-                </button>
-                <input
-                  ref={assetFileRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
+            {/* Socials Manager Banner */}
+            <div className="surface p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border border-[var(--accent)]/30 bg-[var(--accent)]/5 rounded-2xl">
+              <div className="flex items-center gap-3">
+                <Share2 className="w-5 h-5 text-[var(--accent)] shrink-0" />
+                <div>
+                  <div className="text-sm font-semibold text-[var(--ink)]">Manage Socials & App Themed Logos</div>
+                  <div className="text-xs text-[var(--muted)]">Configure links and homepage visibility for Twitter, WhatsApp, Reddit, Telegram, Instagram, & custom sites.</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  sfxClick();
+                  setTab("socials");
+                }}
+                className="btn btn-primary px-3.5 py-1.5 text-xs font-semibold shrink-0 flex items-center gap-1.5"
+              >
+                <span>Open Socials Manager</span>
+                <span>→</span>
+              </button>
+            </div>
+
+            <div className="surface-elevated p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold flex items-center gap-2 text-sm text-[var(--ink)]">
+                  <Plus className="w-4 h-4 text-[var(--accent)]" /> Add Content or Connection DP
+                </h3>
+                <span className="text-xs text-[var(--muted)]">{assets.length} total items</span>
+              </div>
+
+              {/* Asset Type Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[var(--muted)]">Content Category</label>
+                <select
+                  value={newAsset.type}
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) uploadAssetImage(file);
-                    e.target.value = "";
+                    const newType = e.target.value;
+                    setNewAsset((p) => ({
+                      ...p,
+                      type: newType,
+                      show_on_home: newType === "connection" ? true : p.show_on_home,
+                    }));
                   }}
+                  className="field font-medium"
+                >
+                  <option value="connection">Connection Link / Social (Homepage DP with Themed Logo)</option>
+                  <option value="photo">Photo (Gallery)</option>
+                  <option value="app">App (Portfolio Projects)</option>
+                  <option value="game">Game (Loved Games)</option>
+                  <option value="link">Interest (Studies & Hobbies)</option>
+                </select>
+              </div>
+
+              {/* Themed Platform Presets for Connections */}
+              {newAsset.type === "connection" && (
+                <div className="space-y-2 p-3.5 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-[var(--ink)] flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-[var(--accent)]" /> Choose Themed Site Preset:
+                    </span>
+                    <span className="text-[11px] text-[var(--muted)]">Auto-fills theme & prefix</span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {ALL_PLATFORMS.map((p) => {
+                      const isSelected = newAsset.platform === p.id;
+                      const { Icon } = p;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => {
+                            sfxClick();
+                            setNewAsset((prev) => ({
+                              ...prev,
+                              platform: p.id,
+                              title: prev.title && prev.title !== PLATFORM_THEMES[prev.platform]?.name ? prev.title : p.name,
+                              url: prev.url && !prev.url.startsWith("http") ? prev.url : p.exampleUrl,
+                            }));
+                          }}
+                          className={cn(
+                            "px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all border",
+                            isSelected
+                              ? "text-white shadow-md scale-102 border-transparent font-semibold"
+                              : "bg-[var(--surface)] text-[var(--ink)] border-[var(--hairline)] hover:border-[var(--accent)]/50"
+                          )}
+                          style={{
+                            background: isSelected ? p.gradient : undefined,
+                          }}
+                        >
+                          <Icon className="w-3.5 h-3.5 shrink-0" />
+                          <span>{p.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Input Fields */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-[var(--muted)]">Title / Username</label>
+                  <input
+                    placeholder="e.g. GitHub, WhatsApp, Vansh Kumar"
+                    value={newAsset.title}
+                    onChange={(e) => setNewAsset((p) => ({ ...p, title: e.target.value }))}
+                    className="field"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-[var(--muted)]">URL / Link Target</label>
+                  <input
+                    placeholder="https://x.com/username or https://wa.me/..."
+                    value={newAsset.url}
+                    onChange={(e) => setNewAsset((p) => ({ ...p, url: e.target.value }))}
+                    className="field"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-[var(--muted)]">Description (optional)</label>
+                <input
+                  placeholder="Short note or account handle"
+                  value={newAsset.description}
+                  onChange={(e) => setNewAsset((p) => ({ ...p, description: e.target.value }))}
+                  className="field"
                 />
               </div>
-              <button onClick={addAsset} className="btn btn-primary px-4 py-2">Add</button>
-            </div>
-            {assets.map((a) => (
-              <div key={a.id} className="surface p-3 flex items-center gap-3">
-                {a.image_url && <img src={a.image_url} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0" />}
-                <div className="flex-1"><div className="font-semibold text-sm">{a.title}</div><div className="text-xs" style={{ color: "var(--muted)" }}>{a.type}</div></div>
-                <button onClick={() => deleteAsset(a.id)} className="icon-btn" style={{ width: 32, height: 32 }}><Trash2 className="w-4 h-4" /></button>
+
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-[var(--muted)]">
+                  {newAsset.type === "connection" ? "Photo URL (User Avatar / DP)" : "Image / Thumbnail URL"}
+                </label>
+                <div className="flex gap-2 items-center">
+                  <input
+                    placeholder={
+                      newAsset.type === "connection"
+                        ? "Avatar URL (e.g. https://github.com/user.png) — leave empty for themed logo avatar"
+                        : "Image URL"
+                    }
+                    value={newAsset.image_url}
+                    onChange={(e) => setNewAsset((p) => ({ ...p, image_url: e.target.value }))}
+                    className="field flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => assetFileRef.current?.click()}
+                    disabled={uploadingAsset}
+                    className="btn btn-secondary px-3 py-2.5 shrink-0"
+                    title="Upload image file"
+                  >
+                    <Upload className="w-4 h-4" /> {uploadingAsset ? "…" : "Upload"}
+                  </button>
+                  <input
+                    ref={assetFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) uploadAssetImage(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </div>
               </div>
-            ))}
+
+              {/* Show on Homepage Toggle Switch */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-[var(--surface-2)] border border-[var(--hairline)]">
+                <div>
+                  <div className="text-xs font-semibold text-[var(--ink)] flex items-center gap-1.5">
+                    <Eye className="w-4 h-4 text-emerald-500" /> Show on Homepage
+                  </div>
+                  <div className="text-[11px] text-[var(--muted)]">
+                    Display this item in the public homepage social/connection links bar.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sfxClick();
+                    setNewAsset((p) => ({ ...p, show_on_home: !p.show_on_home }));
+                  }}
+                  className={cn(
+                    "px-3 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 border",
+                    newAsset.show_on_home
+                      ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+                      : "bg-[var(--surface)] text-[var(--muted)] border-[var(--hairline)]"
+                  )}
+                >
+                  {newAsset.show_on_home ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-500" />
+                      <span>Visible</span>
+                    </>
+                  ) : (
+                    <span>Hidden</span>
+                  )}
+                </button>
+              </div>
+
+              {/* Live Advanced PFP Preview */}
+              {newAsset.type === "connection" && (
+                <div className="p-3.5 rounded-xl border border-[var(--hairline)] bg-[var(--surface)] flex items-center gap-4">
+                  <AdvancedPfp
+                    src={newAsset.image_url}
+                    title={newAsset.title || "Preview"}
+                    url={newAsset.url}
+                    platform={newAsset.platform}
+                    size="lg"
+                    showBadge={true}
+                    showGlow={true}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-[var(--ink)]">Live PFP Preview</div>
+                    <div className="text-xs text-[var(--muted)]">
+                      {newAsset.title || "Themed Site Link"} ({PLATFORM_THEMES[newAsset.platform]?.name})
+                    </div>
+                    <div className="text-[10px] text-[var(--accent)] mt-0.5">
+                      Includes platform badge overlay + neon halo aura
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={addAsset}
+                  disabled={!newAsset.title.trim()}
+                  className="btn btn-primary px-5 py-2.5 text-xs font-semibold flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" /> Add Item
+                </button>
+              </div>
+            </div>
+
+            {/* Filter buttons */}
+            <div className="flex flex-wrap items-center gap-1.5 p-1 bg-[var(--surface-2)] rounded-xl border border-[var(--hairline)]">
+              {[
+                { id: "all", label: "All Items" },
+                { id: "on_home", label: "On Home" },
+                { id: "connection", label: "Connections (DP)" },
+                { id: "photo", label: "Photos" },
+                { id: "app", label: "Apps" },
+                { id: "game", label: "Games" },
+                { id: "link", label: "Interests" },
+              ].map((f) => {
+                let count = 0;
+                if (f.id === "all") count = assets.length;
+                else if (f.id === "on_home") count = assets.filter((a) => a.show_on_home !== false).length;
+                else count = assets.filter((a) => a.type === f.id).length;
+
+                return (
+                  <button
+                    key={f.id}
+                    onClick={() => {
+                      sfxClick();
+                      setAssetFilter(f.id);
+                    }}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5",
+                      assetFilter === f.id
+                        ? "bg-[var(--surface)] text-[var(--ink)] shadow-sm font-semibold"
+                        : "text-[var(--muted)] hover:text-[var(--ink)]"
+                    )}
+                  >
+                    <span>{f.label}</span>
+                    <span className="text-[10px] opacity-60">({count})</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Items list */}
+            {assets.filter((a) => {
+              if (assetFilter === "all") return true;
+              if (assetFilter === "on_home") return a.show_on_home !== false;
+              return a.type === assetFilter;
+            }).length === 0 ? (
+              <div className="surface p-8 text-center text-sm text-[var(--muted)]">
+                No items found under this filter.
+              </div>
+            ) : (
+              assets
+                .filter((a) => {
+                  if (assetFilter === "all") return true;
+                  if (assetFilter === "on_home") return a.show_on_home !== false;
+                  return a.type === assetFilter;
+                })
+                .map((a) => {
+                  const isConn = a.type === "connection";
+                  const isDeleting = deletingAssetId === a.id;
+                  const theme = detectPlatform(a.url || "", a.title, a.platform);
+                  const isShownOnHome = a.show_on_home !== false;
+
+                  return (
+                    <div
+                      key={a.id}
+                      className={cn(
+                        "surface p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3.5 transition-all",
+                        isDeleting && "opacity-40 pointer-events-none scale-98"
+                      )}
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                        {/* Advanced PFP or Asset Thumbnail Preview */}
+                        {isConn ? (
+                          <AdvancedPfp
+                            src={a.image_url}
+                            title={a.title}
+                            url={a.url}
+                            platform={a.platform}
+                            size="md"
+                            showBadge={true}
+                            showGlow={false}
+                          />
+                        ) : a.image_url ? (
+                          <img
+                            src={a.image_url}
+                            alt=""
+                            className="w-12 h-12 rounded-lg object-cover shrink-0 border border-[var(--hairline)]"
+                          />
+                        ) : (
+                          <div className="w-12 h-12 rounded-lg bg-[var(--surface-2)] border border-[var(--hairline)] flex items-center justify-center shrink-0">
+                            <ImageIcon className="w-5 h-5 text-[var(--muted)]" />
+                          </div>
+                        )}
+
+                        {/* Content details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-sm text-[var(--ink)] truncate">{a.title}</span>
+
+                            {/* Themed Platform or Category Badge */}
+                            {isConn ? (
+                              <span
+                                className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full text-white flex items-center gap-1 shadow-xs"
+                                style={{ background: theme.gradient }}
+                              >
+                                <theme.Icon className="w-2.5 h-2.5" />
+                                <span>{theme.name}</span>
+                              </span>
+                            ) : (
+                              <span
+                                className={cn(
+                                  "text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full",
+                                  a.type === "app"
+                                    ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20"
+                                    : a.type === "photo"
+                                    ? "bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/20"
+                                    : a.type === "game"
+                                    ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                                    : "bg-[var(--surface-2)] text-[var(--muted)] border border-[var(--hairline)]"
+                                )}
+                              >
+                                {a.type}
+                              </span>
+                            )}
+                          </div>
+
+                          {a.description && (
+                            <div className="text-xs text-[var(--muted)] truncate mt-0.5">{a.description}</div>
+                          )}
+                          {a.url && (
+                            <div className="text-[11px] text-[var(--accent)] truncate mt-0.5 flex items-center gap-1">
+                              <span className="truncate">{a.url}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action Controls: Show on Home Toggle + Permanent Delete */}
+                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                        {/* Toggle Show on Home Button */}
+                        <button
+                          type="button"
+                          onClick={() => toggleShowOnHome(a)}
+                          className={cn(
+                            "px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all border",
+                            isShownOnHome
+                              ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/25 hover:bg-emerald-500/25"
+                              : "bg-[var(--surface-2)] text-[var(--muted)] border-[var(--hairline)] hover:text-[var(--ink)]"
+                          )}
+                          title={isShownOnHome ? "Click to hide from Homepage" : "Click to show on Homepage"}
+                        >
+                          {isShownOnHome ? (
+                            <>
+                              <Eye className="w-3.5 h-3.5 text-emerald-500" />
+                              <span>On Home</span>
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="w-3.5 h-3.5" />
+                              <span>Hidden</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* Delete Button */}
+                        <button
+                          type="button"
+                          onClick={() => deleteAsset(a.id, a.title)}
+                          disabled={isDeleting}
+                          className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg text-red-500 hover:text-red-600 hover:bg-red-500/10 transition-colors shrink-0 flex items-center gap-1 text-xs font-semibold border border-transparent hover:border-red-500/20"
+                          title={`Permanently delete "${a.title}"`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span className="hidden sm:inline">{isDeleting ? "…" : "Delete"}</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+            )}
           </div>
         )}
 
@@ -957,6 +1844,14 @@ export function Admin() {
           </div>
         )}
       </div>
+
+      {/* Floating Action Feedback Toast */}
+      {toastMsg && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl bg-[var(--ink)] text-[var(--bg)] text-xs font-semibold shadow-2xl border border-[var(--hairline)] transition-all animate-in fade-in slide-in-from-bottom-2">
+          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
     </div>
   );
 }
